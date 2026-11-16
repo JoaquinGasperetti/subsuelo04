@@ -2,7 +2,7 @@
 // SUBSUELO 04: EL ACECHADOR (PS2 3D Survival Horror - AthenaEnv V4)
 // ============================================================================
 
-import { createWorldGrid, moveWithCollision, LORE_MESSAGES } from "./src/map.js";
+import { createWorldGrid, isPosWalkable, getCell, LORE_MESSAGES } from "./src/map.js";
 import { AI_PATROL, updateStalkerAI } from "./src/ai.js";
 import { render3DWorld, renderAnimatedMapPDA } from "./src/renderer.js";
 
@@ -67,7 +67,12 @@ const stalker = {
 
 let entities = [];
 
+let lastRumbleBig = -1;
+let lastRumbleSmall = -1;
 function triggerRumble(big, small) {
+    if (big === lastRumbleBig && small === lastRumbleSmall) return;
+    lastRumbleBig = big;
+    lastRumbleSmall = small;
     try {
         if (typeof Pads.rumble === "function") {
             Pads.rumble(0, big, small);
@@ -263,7 +268,17 @@ Screen.display(() => {
         const dx = (dirX * fwd - dirY * strafe) * speed;
         const dy = (dirY * fwd + dirX * strafe) * speed;
 
-        const bumpedGate = moveWithCollision(worldGrid, player, dx, dy, 0.28);
+        let bumpedGate = false;
+        if (isPosWalkable(worldGrid, player.x + dx, player.y, 0.25)) {
+            player.x += dx;
+        } else if (getCell(worldGrid, Math.floor(player.x + dx + (dx > 0 ? 0.28 : -0.28)), Math.floor(player.y)) === 5) {
+            bumpedGate = true;
+        }
+        if (isPosWalkable(worldGrid, player.x, player.y + dy, 0.25)) {
+            player.y += dy;
+        } else if (getCell(worldGrid, Math.floor(player.x), Math.floor(player.y + dy + (dy > 0 ? 0.28 : -0.28))) === 5) {
+            bumpedGate = true;
+        }
         if (bumpCooldown > 0) bumpCooldown--;
         if (bumpedGate && bumpCooldown === 0) {
             bumpCooldown = 60;

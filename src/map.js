@@ -1,4 +1,4 @@
-// Mapa 20x20 del Subsuelo 04 y colisiones anti-atravesamiento
+// Mapa 20x20 del Subsuelo 04 y colisiones
 // 0 = Pasillo libre
 // 1 = Pared de hormigon humedo
 // 2 = Pilar/estructura oxidada
@@ -49,48 +49,24 @@ export function isCellBlocked(grid, gx, gy) {
     return getCell(grid, gx, gy) !== 0;
 }
 
-// Colision robusta con margen amplio (0.34) + puntos medios para impedir atravesar esquinas o paredes
-export function isPosWalkable(grid, nx, ny, margin = 0.28) {
-    if (!Number.isFinite(nx) || !Number.isFinite(ny)) return false;
-    if (nx < 1.0 + margin || nx > MAP_W - 1.0 - margin) return false;
-    if (ny < 1.0 + margin || ny > MAP_H - 1.0 - margin) return false;
-
-    const minX = Math.floor(nx - margin);
-    const maxX = Math.floor(nx + margin);
-    const minY = Math.floor(ny - margin);
-    const maxY = Math.floor(ny + margin);
-
-    for (let gy = minY; gy <= maxY; gy++) {
-        for (let gx = minX; gx <= maxX; gx++) {
-            if (isCellBlocked(grid, gx, gy)) return false;
-        }
+export function isPosWalkable(grid, nx, ny, margin = 0.25) {
+    if (isNaN(nx) || isNaN(ny)) return false;
+    const checks = [
+        [nx - margin, ny - margin],
+        [nx + margin, ny - margin],
+        [nx - margin, ny + margin],
+        [nx + margin, ny + margin],
+        [nx,          ny - margin],
+        [nx,          ny + margin],
+        [nx - margin, ny],
+        [nx + margin, ny]
+    ];
+    for (let i = 0; i < 8; i++) {
+        const mx = Math.floor(checks[i][0]);
+        const my = Math.floor(checks[i][1]);
+        if (isCellBlocked(grid, mx, my)) return false;
     }
     return true;
-}
-
-// Movimiento con sub-pasos y deslizamiento seguro por eje para evitar atravesar paredes al correr
-export function moveWithCollision(grid, entity, dx, dy, margin = 0.28) {
-    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 0.03));
-    const sx = dx / steps;
-    const sy = dy / steps;
-    let bumpedGate = false;
-
-    for (let i = 0; i < steps; i++) {
-        if (isPosWalkable(grid, entity.x + sx, entity.y, margin)) {
-            entity.x += sx;
-        } else {
-            const checkX = Math.floor(entity.x + sx + (sx > 0 ? margin : -margin));
-            if (getCell(grid, checkX, Math.floor(entity.y)) === 5) bumpedGate = true;
-        }
-
-        if (isPosWalkable(grid, entity.x, entity.y + sy, margin)) {
-            entity.y += sy;
-        } else {
-            const checkY = Math.floor(entity.y + sy + (sy > 0 ? margin : -margin));
-            if (getCell(grid, Math.floor(entity.x), checkY) === 5) bumpedGate = true;
-        }
-    }
-    return bumpedGate;
 }
 
 export const LORE_MESSAGES = [
