@@ -1,36 +1,37 @@
-// Renderizador 3D Raycaster de 320 columnas (optimizado para PCSX2)
+// Renderizador 3D Raycaster de 320 columnas + PDA Tactico Animado
 import { MAP_W, MAP_H } from "./map.js";
 
 export const NUM_RAYS = 320;
-export const FOV = 1.05;
 const zBuffer = new Float32Array(NUM_RAYS);
 
-export function render3DWorld(screenW, screenH, grid, player, stalker, entities, dangerRatio, frameTick, breakerActive) {
+export function render3DWorld(screenW, screenH, grid, player, stalker, entities, dangerRatio, frameTick, breakerActive, fov, flashIntensity) {
     const colW = Math.floor(screenW / NUM_RAYS);
-    const bobOffset = Math.floor(Math.sin(player.bobPhase) * 6.0);
-    const panicShake = (dangerRatio > 0.35) ? Math.floor((Math.random() - 0.5) * 6.0 * dangerRatio) : 0;
-    const halfH = Math.floor(screenH * 0.5) + bobOffset + panicShake;
+    const bobOffset = Math.floor(Math.sin(player.bobPhase) * 6.5);
+    const swayOffset = Math.floor(Math.cos(player.bobPhase * 0.5) * 3.0);
+    const panicShakeY = (dangerRatio > 0.30) ? Math.floor((Math.random() - 0.5) * 7.0 * dangerRatio) : 0;
+    const panicShakeX = (dangerRatio > 0.45) ? Math.floor((Math.random() - 0.5) * 4.0 * dangerRatio) : 0;
+    const halfH = Math.floor(screenH * 0.5) + bobOffset + panicShakeY;
 
     // 1. Techo y piso con bandas de profundidad y pulso rojo de peligro
-    const ceilR = Math.floor(7 + dangerRatio * 26);
+    const ceilR = Math.floor(7 + dangerRatio * 28);
     Draw.rect(0, 0, screenW, Math.max(1, halfH), Color.new(ceilR, 5, 10, 128));
-    Draw.rect(0, Math.max(0, halfH), screenW, screenH - Math.max(0, halfH), Color.new(16 + Math.floor(dangerRatio * 18), 13, 14, 128));
+    Draw.rect(0, Math.max(0, halfH), screenW, screenH - Math.max(0, halfH), Color.new(16 + Math.floor(dangerRatio * 20), 13, 14, 128));
 
-    // Bandas de profundidad en piso/techo para mayor sensacion 3D
     Draw.rect(0, Math.max(0, halfH - 42), screenW, 84, Color.new(4, 3, 6, 128));
     Draw.rect(0, Math.max(0, halfH - 18), screenW, 36, Color.new(2, 2, 4, 128));
 
     const flashActive = player.flashlightOn && player.battery > 0.0;
-    const lowFlicker = (flashActive && player.battery < 22.0 && (frameTick % 11 === 0)) ? 0.32 : 1.0;
-    const emerFlicker = ((frameTick % 97) < 6) ? 0.45 : 1.0;
+    const lowFlicker = (flashActive && player.battery < 24.0 && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.28 : 1.0;
+    const effFlash = flashActive ? (flashIntensity * lowFlicker) : 0.0;
+    const emerFlicker = ((frameTick % 97) < 6) ? 0.42 : 1.0;
 
     const dirX = Math.cos(player.ang);
     const dirY = Math.sin(player.ang);
-    const planeScale = Math.tan(FOV * 0.5);
+    const planeScale = Math.tan(fov * 0.5);
     const planeX = -dirY * planeScale;
     const planeY =  dirX * planeScale;
 
-    // 2. Raycasting DDA de 320 columnas (2px de ancho por columna)
+    // 2. Raycasting DDA de 320 columnas
     for (let i = 0; i < NUM_RAYS; i++) {
         const camX = (2.0 * (i + 0.5) / NUM_RAYS) - 1.0;
         const rayDirX = dirX + planeX * camX;
@@ -85,7 +86,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         }
 
         let perpDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
-        if (perpDist < 0.12) perpDist = 0.12;
+        if (perpDist < 0.14) perpDist = 0.14;
         zBuffer[i] = perpDist;
 
         const wallH = Math.floor(screenH / perpDist);
@@ -96,10 +97,9 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         const clippedH = drawEnd - drawStart;
         if (clippedH <= 0) continue;
 
-        // Iluminacion por distancia + cono de linterna
         const centerDist = Math.abs(camX);
-        const beam = flashActive ? Math.max(0.0, 1.0 - centerDist * 1.45) * lowFlicker : 0.0;
-        const maxVis = flashActive ? (6.0 + beam * 6.0) : 3.4;
+        const beam = effFlash > 0.0 ? Math.max(0.0, 1.0 - centerDist * 1.45) * effFlash : 0.0;
+        const maxVis = (effFlash > 0.0) ? (6.0 + beam * 6.0) : 3.3;
         let light = Math.max(0.05, 1.0 - (perpDist / maxVis));
         if (side === 1) light *= 0.72;
         light = Math.min(1.0, light + beam * 0.28 * Math.max(0.0, 1.0 - perpDist / 10.5));
@@ -107,7 +107,6 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         let wallX = (side === 0) ? (player.y + perpDist * rayDirY) : (player.x + perpDist * rayDirX);
         wallX -= Math.floor(wallX);
 
-        // Detalle procedural por textura de franjas
         const isSeam = (wallX < 0.04 || wallX > 0.96);
         const isPanel = (Math.floor(wallX * 8) % 2 === 0);
         if (isSeam) light *= 0.58;
@@ -115,22 +114,21 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
 
         let r = 108, g = 114, b = 122;
         if (hit === 2) {
-            r = 138; g = 74; b = 56; // Pilar oxidado
+            r = 138; g = 74; b = 56;
         } else if (hit === 3) {
-            r = Math.floor(155 * emerFlicker); g = 32; b = 32; // Zona ritual / luz roja
+            r = Math.floor(155 * emerFlicker); g = 32; b = 32;
         } else if (hit === 4) {
             r = breakerActive ? 48 : 145;
             g = breakerActive ? 215 : 115;
             b = breakerActive ? 92 : 40;
         } else if (hit === 5) {
-            // Reja de seguridad metalica (franjas alternadas)
             const bar = (Math.floor(wallX * 10) % 2 === 0);
             r = bar ? 95 : 35;
             g = bar ? 105 : 40;
             b = bar ? 115 : 48;
         }
 
-        const cR = Math.min(255, Math.floor(r * light + dangerRatio * 22));
+        const cR = Math.min(255, Math.floor(r * light + dangerRatio * 24));
         const cG = Math.min(255, Math.floor(g * light));
         const cB = Math.min(255, Math.floor(b * light));
         Draw.rect(i * colW, drawStart, colW, clippedH, Color.new(cR, cG, cB, 128));
@@ -139,15 +137,9 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     // 3. Proyeccion 3D de Entidades con Z-Buffer
     const drawList = [];
     for (let e = 0; e < entities.length; e++) {
-        if (!entities[e].taken) {
-            drawList.push(entities[e]);
-        }
+        if (!entities[e].taken) drawList.push(entities[e]);
     }
-    drawList.push({
-        kind: "stalker",
-        x: stalker.x,
-        y: stalker.y
-    });
+    drawList.push({ kind: "stalker", x: stalker.x, y: stalker.y });
 
     for (let s = 0; s < drawList.length; s++) {
         drawList[s].distSq = (drawList[s].x - player.x) ** 2 + (drawList[s].y - player.y) ** 2;
@@ -164,7 +156,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
 
         if (transformY <= 0.22) continue;
 
-        const screenX = Math.floor((screenW * 0.5) * (1.0 + transformX / transformY));
+        const screenX = Math.floor((screenW * 0.5) * (1.0 + transformX / transformY)) + swayOffset + panicShakeX;
         const spH = Math.min(screenH * 2, Math.floor(screenH / transformY));
         const colIdx = Math.floor(screenX / colW);
 
@@ -184,7 +176,6 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             }
             if (!visible) continue;
 
-            // Silueta + garras + cabeza palida + ojos carmesi
             Draw.rect(mLeft, mTop + Math.floor(drawH * 0.22), mW, Math.floor(drawH * 0.78), Color.new(18, 5, 8, 128));
             const headW = Math.floor(mW * 0.56);
             const headH = Math.floor(drawH * 0.24);
@@ -214,45 +205,87 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     }
 }
 
-export function renderMinimap(screenW, screenH, grid, player, stalker, entities, dangerRatio) {
-    const cellPx = 5;
-    const mapPx = MAP_W * cellPx;
-    const ox = screenW - mapPx - 14;
-    const oy = 42;
+// PDA Tactico animado (se desliza desde abajo y despliega al presionar SELECT o L2)
+export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities, dangerRatio, mapAnim, frameTick, fnt) {
+    if (mapAnim <= 0.01) return;
 
-    Draw.rect(ox - 3, oy - 3, mapPx + 6, mapPx + 6, Color.new(0, 0, 0, 95));
+    // Ease-out cubic para una animacion suave al levantar el plano
+    const ease = 1.0 - Math.pow(1.0 - mapAnim, 3);
+    const panelW = 360;
+    const panelH = 290;
+    const targetY = Math.floor((screenH - panelH) * 0.5);
+    const ox = Math.floor((screenW - panelW) * 0.5);
+    const oy = Math.floor(screenH + (targetY - screenH) * ease);
+
+    // Oscurecer fondo proporcionalmente
+    Draw.rect(0, 0, screenW, screenH, Color.new(0, 0, 0, Math.floor(75 * ease)));
+
+    // Carcasa del PDA / Plano tactico
+    Draw.rect(ox - 6, oy - 6, panelW + 12, panelH + 12, Color.new(20, 34, 24, 122));
+    Draw.rect(ox, oy, panelW, panelH, Color.new(6, 14, 9, 124));
+
+    // Cabecera del PDA
+    Draw.rect(ox, oy, panelW, 28, Color.new(14, 38, 20, 126));
+    fnt.scale = Math.fround(0.48);
+    fnt.color = Color.new(110, 245, 140, 128);
+    fnt.print(ox + 10, oy + 6, "PLANO SUBSUELO 04 [SELECT / L2]");
+
+    // Grilla 20x20 centrada
+    const cellPx = 11;
+    const mapPx = MAP_W * cellPx; // 220
+    const mx0 = ox + 16;
+    const my0 = oy + 42;
+
     for (let y = 0; y < MAP_H; y++) {
         for (let x = 0; x < MAP_W; x++) {
             const v = grid[y][x];
             if (v > 0) {
-                const col = (v === 4) ? Color.new(60, 220, 100, 115)
-                          : (v === 5) ? Color.new(220, 160, 60, 115)
-                          : (v === 3) ? Color.new(140, 40, 40, 115)
-                          : Color.new(85, 90, 100, 115);
-                Draw.rect(ox + x * cellPx, oy + y * cellPx, cellPx, cellPx, col);
+                const col = (v === 4) ? Color.new(60, 235, 110, 128)
+                          : (v === 5) ? Color.new(235, 165, 55, 128)
+                          : (v === 3) ? Color.new(165, 45, 45, 128)
+                          : Color.new(55, 115, 70, 120);
+                Draw.rect(mx0 + x * cellPx, my0 + y * cellPx, cellPx - 1, cellPx - 1, col);
             }
         }
     }
 
-    // Entidades sin recoger
+    // Linea de barrido tipo radar
+    const scanY = my0 + ((frameTick * 3) % mapPx);
+    Draw.rect(mx0, scanY, mapPx, 2, Color.new(80, 255, 120, 52));
+
+    // Entidades
     for (let i = 0; i < entities.length; i++) {
         const e = entities[i];
         if (e.taken) continue;
         const ec = (e.kind === "fuse") ? Color.new(255, 220, 60, 128)
                  : (e.kind === "battery") ? Color.new(60, 230, 255, 128)
-                 : (e.kind === "breaker") ? Color.new(255, 80, 80, 128)
-                 : Color.new(230, 230, 245, 128);
-        Draw.rect(ox + Math.floor(e.x * cellPx) - 1, oy + Math.floor(e.y * cellPx) - 1, 3, 3, ec);
+                 : (e.kind === "breaker") ? Color.new(255, 75, 75, 128)
+                 : Color.new(235, 235, 245, 128);
+        Draw.rect(mx0 + Math.floor(e.x * cellPx) - 2, my0 + Math.floor(e.y * cellPx) - 2, 5, 5, ec);
     }
 
-    // Acechador (parpadea si esta cerca)
-    if (dangerRatio > 0.2) {
-        Draw.rect(ox + Math.floor(stalker.x * cellPx) - 2, oy + Math.floor(stalker.y * cellPx) - 2, 4, 4, Color.new(255, 30, 30, 128));
+    // Blip del Acechador (solo si hay proximidad / interferencia)
+    if (dangerRatio > 0.18 && (frameTick % 16 < 10)) {
+        Draw.rect(mx0 + Math.floor(stalker.x * cellPx) - 3, my0 + Math.floor(stalker.y * cellPx) - 3, 7, 7, Color.new(255, 35, 35, 128));
     }
 
-    // Jugador + vector de direccion
-    const px = ox + Math.floor(player.x * cellPx);
-    const py = oy + Math.floor(player.y * cellPx);
-    Draw.rect(px - 2, py - 2, 4, 4, Color.new(100, 255, 140, 128));
-    Draw.line(px, py, px + Math.floor(Math.cos(player.ang) * 8), py + Math.floor(Math.sin(player.ang) * 8), Color.new(140, 255, 170, 128));
+    // Jugador + cono de vista
+    const px = mx0 + Math.floor(player.x * cellPx);
+    const py = my0 + Math.floor(player.y * cellPx);
+    Draw.rect(px - 3, py - 3, 6, 6, Color.new(120, 255, 150, 128));
+    Draw.line(px, py, px + Math.floor(Math.cos(player.ang) * 14), py + Math.floor(Math.sin(player.ang) * 14), Color.new(150, 255, 180, 128));
+
+    // Leyenda a la derecha dentro del PDA
+    const lx = mx0 + mapPx + 14;
+    fnt.scale = Math.fround(0.44);
+    fnt.color = Color.new(120, 255, 150, 128); fnt.print(lx, my0 + 8,  "TU POSICION");
+    fnt.color = Color.new(255, 220, 60, 128);  fnt.print(lx, my0 + 34, "FUSIBLES");
+    fnt.color = Color.new(255, 75, 75, 128);   fnt.print(lx, my0 + 60, "DISYUNTOR");
+    fnt.color = Color.new(60, 230, 255, 128);  fnt.print(lx, my0 + 86, "BATERIAS");
+    fnt.color = Color.new(235, 235, 245, 128); fnt.print(lx, my0 + 112,"NOTAS");
+    fnt.color = Color.new(60, 235, 110, 128);  fnt.print(lx, my0 + 138,"SALIDA SUR");
+    if (dangerRatio > 0.18) {
+        fnt.color = Color.new(255, 50, 50, 128);
+        fnt.print(lx, my0 + 174, "! ANOMALIA !");
+    }
 }
