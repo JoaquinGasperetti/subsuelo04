@@ -3,7 +3,7 @@
 // 1 = Pared de hormigon humedo
 // 2 = Pilar/estructura oxidada
 // 3 = Pared de zona ritual / sangre
-// 4 = Compuerta blindada de salida (Sur)
+// 4 = Compuerta blindada de salida (Norte)
 // 5 = Reja de seguridad (se abre al activar el Disyuntor Central)
 
 export const MAP_W = 20;

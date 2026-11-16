@@ -8,6 +8,9 @@ import { render3DWorld, renderAnimatedMapPDA } from "./src/renderer.js";
 
 const { width: SCREEN_W, height: SCREEN_H } = Screen.getMode();
 Screen.setVSync(true);
+try {
+    Screen.setParam(Screen.DEPTH_TEST_ENABLE, false);
+} catch (_) {}
 
 const fnt = new Font("default");
 const pad = Pads.get(0);
@@ -164,6 +167,9 @@ Screen.display(() => {
         return;
     }
     try {
+    if (typeof Screen.DEPTH_TEST_ENABLE !== "undefined") {
+        Screen.setParam(Screen.DEPTH_TEST_ENABLE, false);
+    }
     frameTick++;
     pad.update();
 
@@ -209,7 +215,6 @@ Screen.display(() => {
         if (pad.justPressed(Pads.START)) {
             triggerRumble(0, 0);
             gameState = STATE_PAUSE;
-            return;
         }
         if (pad.justPressed(Pads.SELECT) || pad.justPressed(Pads.L2)) {
             mapOpen = !mapOpen;
@@ -234,6 +239,8 @@ Screen.display(() => {
         if (Math.abs(rx) > 0.18) player.ang += rx * turnSpeed;
         if (pad.pressed(Pads.L1)) player.ang -= turnSpeed;
         if (pad.pressed(Pads.R1)) player.ang += turnSpeed;
+        if (player.ang > Math.PI) player.ang -= Math.PI * 2.0;
+        else if (player.ang < -Math.PI) player.ang += Math.PI * 2.0;
 
         // Movimiento
         let fwd = 0.0, strafe = 0.0;
@@ -421,6 +428,7 @@ Screen.display(() => {
             fnt.print(14, SCREEN_H - 26, "Rejas abiertas. Junta los 4 fusibles (" + fusesCollected + "/4). [SELECT/L2: Plano]");
         }
     } else if (gameState === STATE_PAUSE) {
+        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.0, frameTick, fusesCollected === 4, currentFov, flashlightWarmup);
         Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 0, 96));
         fnt.scale = Math.fround(0.95);
         fnt.color = Color.new(240, 240, 245, 128);

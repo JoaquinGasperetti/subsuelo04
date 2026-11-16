@@ -1,7 +1,7 @@
-// Renderizador 3D Raycaster de 320 columnas + PDA Tactico Animado
+// Renderizador 3D Raycaster de 160 columnas + PDA Tactico Animado
 import { MAP_W, MAP_H } from "./map.js";
 
-export const NUM_RAYS = 320;
+export const NUM_RAYS = 160;
 const zBuffer = new Float32Array(NUM_RAYS);
 
 export function render3DWorld(screenW, screenH, grid, player, stalker, entities, dangerRatio, frameTick, breakerActive, fov, flashIntensity) {
@@ -31,7 +31,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     const planeX = -dirY * planeScale;
     const planeY =  dirX * planeScale;
 
-    // 2. Raycasting DDA de 320 columnas
+    // 2. Raycasting DDA de 160 columnas
     for (let i = 0; i < NUM_RAYS; i++) {
         const camX = (2.0 * (i + 0.5) / NUM_RAYS) - 1.0;
         const rayDirX = dirX + planeX * camX;
@@ -100,7 +100,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         const centerDist = Math.abs(camX);
         const beam = effFlash > 0.0 ? Math.max(0.0, 1.0 - centerDist * 1.45) * effFlash : 0.0;
         const maxVis = (effFlash > 0.0) ? (6.0 + beam * 6.0) : 3.3;
-        let light = Math.max(0.05, 1.0 - (perpDist / maxVis));
+        let light = Math.max(0.16, 1.0 - (perpDist / maxVis));
         if (side === 1) light *= 0.72;
         light = Math.min(1.0, light + beam * 0.28 * Math.max(0.0, 1.0 - perpDist / 10.5));
 
@@ -176,19 +176,32 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             }
             if (!visible) continue;
 
-            Draw.rect(mLeft, mTop + Math.floor(drawH * 0.22), mW, Math.floor(drawH * 0.78), Color.new(18, 5, 8, 128));
+            const bodyX = Math.max(0, mLeft);
+            const bodyW = Math.min(screenW, mLeft + mW) - bodyX;
+            if (bodyW > 0) {
+                Draw.rect(bodyX, mTop + Math.floor(drawH * 0.22), bodyW, Math.floor(drawH * 0.78), Color.new(18, 5, 8, 128));
+            }
             const headW = Math.floor(mW * 0.56);
             const headH = Math.floor(drawH * 0.24);
-            Draw.rect(screenX - Math.floor(headW * 0.5), mTop, headW, headH, Color.new(180, 150, 145, 128));
+            const headL = screenX - Math.floor(headW * 0.5);
+            const headX = Math.max(0, headL);
+            const headDrawW = Math.min(screenW, headL + headW) - headX;
+            if (headDrawW > 0 && headH > 0) {
+                Draw.rect(headX, mTop, headDrawW, headH, Color.new(180, 150, 145, 128));
+            }
             const eyeSize = Math.max(2, Math.floor(headW * 0.22));
-            Draw.rect(screenX - Math.floor(headW * 0.30), mTop + Math.floor(headH * 0.38), eyeSize, eyeSize, Color.new(255, 20, 20, 128));
-            Draw.rect(screenX + Math.floor(headW * 0.12), mTop + Math.floor(headH * 0.38), eyeSize, eyeSize, Color.new(255, 20, 20, 128));
+            const eyeY = mTop + Math.floor(headH * 0.38);
+            const e1x = screenX - Math.floor(headW * 0.30);
+            const e2x = screenX + Math.floor(headW * 0.12);
+            if (e1x >= 0 && e1x + eyeSize <= screenW) Draw.rect(e1x, eyeY, eyeSize, eyeSize, Color.new(255, 20, 20, 128));
+            if (e2x >= 0 && e2x + eyeSize <= screenW) Draw.rect(e2x, eyeY, eyeSize, eyeSize, Color.new(255, 20, 20, 128));
         } else {
             if (colIdx < 0 || colIdx >= NUM_RAYS || transformY >= zBuffer[colIdx]) continue;
             const itemSize = Math.max(6, Math.floor(spH * 0.30));
             const iy = Math.max(0, Math.min(screenH - itemSize, halfH + Math.floor(spH * 0.14) + Math.floor(Math.sin(frameTick * 0.1 + s) * 5)));
             const ix = screenX - Math.floor(itemSize * 0.4);
 
+            if (ix < 0 || ix + itemSize > screenW) continue;
             if (sp.kind === "fuse") {
                 Draw.rect(ix, iy, Math.floor(itemSize * 0.8), itemSize, Color.new(255, 205, 45, 128));
                 Draw.rect(ix + 2, iy + 2, Math.max(2, Math.floor(itemSize * 0.4)), Math.max(2, Math.floor(itemSize * 0.5)), Color.new(255, 250, 195, 128));
@@ -196,10 +209,11 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
                 Draw.rect(ix, iy, Math.floor(itemSize * 0.75), itemSize, Color.new(40, 220, 245, 128));
                 Draw.rect(ix + 2, iy + 2, Math.max(2, Math.floor(itemSize * 0.35)), Math.max(2, Math.floor(itemSize * 0.4)), Color.new(200, 255, 255, 128));
             } else if (sp.kind === "breaker") {
-                Draw.rect(ix, iy - Math.floor(itemSize * 0.4), itemSize, itemSize, Color.new(235, 55, 55, 128));
-                Draw.rect(ix + 2, iy - Math.floor(itemSize * 0.3), Math.max(2, itemSize - 4), Math.max(2, Math.floor(itemSize * 0.4)), Color.new(255, 230, 100, 128));
+                const by = Math.max(0, iy - Math.floor(itemSize * 0.4));
+                Draw.rect(ix, by, itemSize, itemSize, Color.new(235, 55, 55, 128));
+                Draw.rect(ix + 2, by + 2, Math.max(2, itemSize - 4), Math.max(2, Math.floor(itemSize * 0.4)), Color.new(255, 230, 100, 128));
             } else if (sp.kind === "note") {
-                Draw.rect(ix, iy + 4, Math.floor(itemSize * 0.8), Math.floor(itemSize * 0.65), Color.new(230, 235, 245, 128));
+                Draw.rect(ix, Math.min(screenH - itemSize, iy + 4), Math.floor(itemSize * 0.8), Math.floor(itemSize * 0.65), Color.new(230, 235, 245, 128));
             }
         }
     }
@@ -237,14 +251,20 @@ export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, en
     const my0 = oy + 42;
 
     for (let y = 0; y < MAP_H; y++) {
-        for (let x = 0; x < MAP_W; x++) {
+        let x = 0;
+        while (x < MAP_W) {
             const v = grid[y][x];
             if (v > 0) {
+                let run = 1;
+                while (x + run < MAP_W && grid[y][x + run] === v) run++;
                 const col = (v === 4) ? Color.new(60, 235, 110, 128)
                           : (v === 5) ? Color.new(235, 165, 55, 128)
                           : (v === 3) ? Color.new(165, 45, 45, 128)
                           : Color.new(55, 115, 70, 120);
-                Draw.rect(mx0 + x * cellPx, my0 + y * cellPx, cellPx - 1, cellPx - 1, col);
+                Draw.rect(mx0 + x * cellPx, my0 + y * cellPx, run * cellPx - 1, cellPx - 1, col);
+                x += run;
+            } else {
+                x++;
             }
         }
     }
