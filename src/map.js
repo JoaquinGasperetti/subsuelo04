@@ -73,5 +73,5 @@ export const LORE_MESSAGES = [
     "NOTA #01: El disyuntor central corta las rejas de los sectores Este y Oeste.",
     "NOTA #02: No corras cerca suyo. Si apagas la linterna y te quedas quieto, pierde tu rastro.",
     "NOTA #03: Si te mira de frente, ilumina sus ojos para frenar su avance.",
-    "NOTA #04: Los 4 fusibles alimentan la compuerta de evacuacion al Sur."
+    "NOTA #04: Los 4 fusibles alimentan la compuerta de evacuacion al Norte (arriba en el plano)."
 ];

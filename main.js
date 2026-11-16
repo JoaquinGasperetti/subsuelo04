@@ -119,8 +119,8 @@ function resetGame() {
     player.flashlightOn = true;
     player.stamina = 100.0;
 
-    stalker.x = 10.0;
-    stalker.y = 15.5;
+    stalker.x = 10.5;
+    stalker.y = 16.5;
     stalker.baseSpeed = 0.024;
     stalker.state = AI_PATROL;
     stalker.targetX = 10.0;
@@ -130,24 +130,24 @@ function resetGame() {
     stalker.nextNode = null;
 
     entities = [
-        { kind: "fuse", x: 10.0, y: 18.2, taken: false },
+        { kind: "fuse", x: 10.0, y: 17.5, taken: false },
         { kind: "fuse", x: 10.0, y: 9.5,  taken: false },
-        { kind: "fuse", x: 2.0,  y: 17.5, taken: false },
-        { kind: "fuse", x: 18.0, y: 17.5, taken: false },
+        { kind: "fuse", x: 2.5,  y: 17.5, taken: false },
+        { kind: "fuse", x: 17.5, y: 17.5, taken: false },
 
-        { kind: "breaker", x: 10.0, y: 12.2, taken: false },
+        { kind: "breaker", x: 10.0, y: 11.5, taken: false },
 
-        { kind: "battery", x: 7.5,  y: 5.5,  taken: false },
-        { kind: "battery", x: 1.8,  y: 2.0,  taken: false },
-        { kind: "battery", x: 18.2, y: 2.0,  taken: false },
+        { kind: "battery", x: 8.5,  y: 5.5,  taken: false },
+        { kind: "battery", x: 1.5,  y: 2.5,  taken: false },
+        { kind: "battery", x: 18.5, y: 2.5,  taken: false },
 
         { kind: "note", x: 10.0, y: 3.5,  taken: false, msgIdx: 0 },
-        { kind: "note", x: 7.5,  y: 14.5, taken: false, msgIdx: 1 },
-        { kind: "note", x: 2.5,  y: 9.5,  taken: false, msgIdx: 2 },
-        { kind: "note", x: 17.5, y: 9.5,  taken: false, msgIdx: 3 }
+        { kind: "note", x: 8.5,  y: 14.5, taken: false, msgIdx: 1 },
+        { kind: "note", x: 3.5,  y: 8.5,  taken: false, msgIdx: 2 },
+        { kind: "note", x: 16.5, y: 8.5,  taken: false, msgIdx: 3 }
     ];
 
-    showRadio("OBJETIVO: Activa el Disyuntor rojo, junta 4 Fusibles y escapa al Sur.", 260);
+    showRadio("OBJETIVO: Activa el Disyuntor rojo, junta 4 Fusibles y escapa al Norte.", 260);
     triggerRumble(0, 0);
 }
 
@@ -183,7 +183,7 @@ Screen.display(() => {
         fnt.print(68, 108, "Survival Horror 3D en Primera Persona (AthenaEnv PS2 / PCSX2)");
         fnt.print(68, 138, "1. Activa el DISYUNTOR ROJO para abrir las rejas Este y Oeste.");
         fnt.print(68, 160, "2. Recolecta los 4 FUSIBLES dorados y recoge baterias cyan.");
-        fnt.print(68, 182, "3. Escapa por la COMPUERTA VERDE en el sector Sur.");
+        fnt.print(68, 182, "3. Escapa por la COMPUERTA VERDE en el sector Norte.");
 
         fnt.color = Color.new(245, 200, 90, 128);
         fnt.print(68, 218, "CONTROLES DUALSHOCK 2:");
@@ -412,7 +412,7 @@ Screen.display(() => {
             fnt.print(14, SCREEN_H - 26, radioText);
         } else if (fusesCollected === 4) {
             fnt.color = Color.new(100, 255, 130, 128);
-            fnt.print(14, SCREEN_H - 26, "COMPUERTA SUR DESBLOQUEADA! Corre hacia la salida verde. [SELECT/L2: Plano]");
+            fnt.print(14, SCREEN_H - 26, "COMPUERTA NORTE DESBLOQUEADA! Corre hacia la salida verde. [SELECT/L2: Plano]");
         } else if (!breakerActive) {
             fnt.color = Color.new(210, 195, 145, 128);
             fnt.print(14, SCREEN_H - 26, "Busca el Disyuntor rojo al centro para abrir las rejas. [SELECT/L2: Plano]");

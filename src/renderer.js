@@ -224,7 +224,7 @@ export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, en
     Draw.rect(ox - 6, oy - 6, panelW + 12, panelH + 12, Color.new(20, 34, 24, 122));
     Draw.rect(ox, oy, panelW, panelH, Color.new(6, 14, 9, 124));
 
-    // Cabecera del PDA
+    // Cabecera del PDA + Brujula cardinal (N arriba, S abajo, O izq, E der)
     Draw.rect(ox, oy, panelW, 28, Color.new(14, 38, 20, 126));
     fnt.scale = Math.fround(0.48);
     fnt.color = Color.new(110, 245, 140, 128);
@@ -275,6 +275,14 @@ export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, en
     Draw.rect(px - 3, py - 3, 6, 6, Color.new(120, 255, 150, 128));
     Draw.line(px, py, px + Math.floor(Math.cos(player.ang) * 14), py + Math.floor(Math.sin(player.ang) * 14), Color.new(150, 255, 180, 128));
 
+    // Marcadores cardinales N/S/O/E alrededor de la grilla
+    fnt.scale = Math.fround(0.42);
+    fnt.color = Color.new(130, 245, 155, 128);
+    fnt.print(mx0 + Math.floor(mapPx * 0.5) - 4, my0 - 12, "N");
+    fnt.print(mx0 + Math.floor(mapPx * 0.5) - 4, my0 + mapPx + 2, "S");
+    fnt.print(mx0 - 11, my0 + Math.floor(mapPx * 0.5) - 5, "O");
+    fnt.print(mx0 + mapPx + 3, my0 + Math.floor(mapPx * 0.5) - 5, "E");
+
     // Leyenda a la derecha dentro del PDA
     const lx = mx0 + mapPx + 14;
     fnt.scale = Math.fround(0.44);
@@ -283,7 +291,7 @@ export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, en
     fnt.color = Color.new(255, 75, 75, 128);   fnt.print(lx, my0 + 60, "DISYUNTOR");
     fnt.color = Color.new(60, 230, 255, 128);  fnt.print(lx, my0 + 86, "BATERIAS");
     fnt.color = Color.new(235, 235, 245, 128); fnt.print(lx, my0 + 112,"NOTAS");
-    fnt.color = Color.new(60, 235, 110, 128);  fnt.print(lx, my0 + 138,"SALIDA SUR");
+    fnt.color = Color.new(60, 235, 110, 128);  fnt.print(lx, my0 + 138,"SALIDA NORTE");
     if (dangerRatio > 0.18) {
         fnt.color = Color.new(255, 50, 50, 128);
         fnt.print(lx, my0 + 174, "! ANOMALIA !");
