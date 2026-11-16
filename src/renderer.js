@@ -1,15 +1,19 @@
 // Renderizador 3D Raycaster de 160 columnas + PDA Tactico Animado
 import { MAP_W, MAP_H } from "./map.js";
+import { ENABLE_BOB } from "./config.js";
 
 export const NUM_RAYS = 160;
 const zBuffer = new Float32Array(NUM_RAYS);
 
+// Diagnostico: estadisticas del ultimo frame y modo de color de paredes (0 normal, 1 magenta plano)
+export const renderStats = { cols: 0, minD: 99.0, maxD: 0.0, wallMode: 0 };
+
 export function render3DWorld(screenW, screenH, grid, player, stalker, entities, dangerRatio, frameTick, breakerActive, fov, flashIntensity) {
     const colW = Math.floor(screenW / NUM_RAYS);
-    const bobOffset = Math.floor(Math.sin(player.bobPhase) * 6.5);
-    const swayOffset = Math.floor(Math.cos(player.bobPhase * 0.5) * 3.0);
-    const panicShakeY = (dangerRatio > 0.30) ? Math.floor((Math.random() - 0.5) * 7.0 * dangerRatio) : 0;
-    const panicShakeX = (dangerRatio > 0.45) ? Math.floor((Math.random() - 0.5) * 4.0 * dangerRatio) : 0;
+    const bobOffset = ENABLE_BOB ? Math.floor(Math.sin(player.bobPhase) * 6.5) : 0;
+    const swayOffset = ENABLE_BOB ? Math.floor(Math.cos(player.bobPhase * 0.5) * 3.0) : 0;
+    const panicShakeY = (ENABLE_BOB && dangerRatio > 0.30) ? Math.floor((Math.random() - 0.5) * 7.0 * dangerRatio) : 0;
+    const panicShakeX = (ENABLE_BOB && dangerRatio > 0.45) ? Math.floor((Math.random() - 0.5) * 4.0 * dangerRatio) : 0;
     const halfH = Math.floor(screenH * 0.5) + bobOffset + panicShakeY;
 
     // 1. Techo y piso con bandas de profundidad y pulso rojo de peligro
@@ -30,6 +34,8 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     const planeScale = Math.tan(fov * 0.5);
     const planeX = -dirY * planeScale;
     const planeY =  dirX * planeScale;
+
+    renderStats.cols = 0; renderStats.minD = 99.0; renderStats.maxD = 0.0;
 
     // 2. Raycasting DDA de 160 columnas
     for (let i = 0; i < NUM_RAYS; i++) {
@@ -131,7 +137,14 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         const cR = Math.min(255, Math.floor(r * light + dangerRatio * 24));
         const cG = Math.min(255, Math.floor(g * light));
         const cB = Math.min(255, Math.floor(b * light));
-        Draw.rect(i * colW, drawStart, colW, clippedH, Color.new(cR, cG, cB, 128));
+        renderStats.cols++;
+        if (perpDist < renderStats.minD) renderStats.minD = perpDist;
+        if (perpDist > renderStats.maxD) renderStats.maxD = perpDist;
+        if (renderStats.wallMode === 1) {
+            Draw.rect(i * colW, drawStart, colW, clippedH, Color.new(255, 0, 255, 128));
+        } else {
+            Draw.rect(i * colW, drawStart, colW, clippedH, Color.new(cR, cG, cB, 128));
+        }
     }
 
     // 3. Proyeccion 3D de Entidades con Z-Buffer

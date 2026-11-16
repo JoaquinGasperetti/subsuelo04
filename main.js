@@ -4,7 +4,8 @@
 
 import { createWorldGrid, isPosWalkable, getCell, LORE_MESSAGES } from "./src/map.js";
 import { AI_PATROL, updateStalkerAI } from "./src/ai.js";
-import { render3DWorld, renderAnimatedMapPDA } from "./src/renderer.js";
+import { render3DWorld, renderAnimatedMapPDA, renderStats } from "./src/renderer.js";
+import { ENABLE_OVERLAYS, ENABLE_RUMBLE } from "./src/config.js";
 
 const { width: SCREEN_W, height: SCREEN_H } = Screen.getMode();
 Screen.setVSync(true);
@@ -41,6 +42,7 @@ let currentFov = 1.05;
 let flashlightWarmup = 1.0;
 let exhausted = false;
 let bumpCooldown = 0;
+let debugMode = 0; // CROSS en juego: 0 apagado, 1 datos, 2 datos + paredes magenta
 
 let worldGrid = createWorldGrid();
 let breakerActive = false;
@@ -73,6 +75,7 @@ let entities = [];
 let lastRumbleBig = -1;
 let lastRumbleSmall = -1;
 function triggerRumble(big, small) {
+    if (!ENABLE_RUMBLE) return;
     if (big === lastRumbleBig && small === lastRumbleSmall) return;
     lastRumbleBig = big;
     lastRumbleSmall = small;
@@ -84,6 +87,7 @@ function triggerRumble(big, small) {
 }
 
 function triggerScreenFlash(r, g, b, alpha) {
+    if (!ENABLE_OVERLAYS) return;
     flashTint.r = r;
     flashTint.g = g;
     flashTint.b = b;
@@ -218,6 +222,10 @@ Screen.display(() => {
         }
         if (pad.justPressed(Pads.SELECT) || pad.justPressed(Pads.L2)) {
             mapOpen = !mapOpen;
+        }
+        if (pad.justPressed(Pads.CROSS)) {
+            debugMode = (debugMode + 1) % 3;
+            renderStats.wallMode = (debugMode === 2) ? 1 : 0;
         }
         if (pad.justPressed(Pads.TRIANGLE)) {
             player.flashlightOn = !player.flashlightOn;
@@ -363,27 +371,29 @@ Screen.display(() => {
 
         render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, dangerRatio, frameTick, fusesCollected === 4, currentFov, flashlightWarmup);
 
-        // Vineta de oscuridad / cansancio / peligro
-        if (!player.flashlightOn || player.battery <= 0.0) {
-            Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 8, 76));
-        }
-        if (exhausted) {
-            const exAlpha = Math.floor(22 + Math.abs(Math.sin(frameTick * 0.14)) * 28);
-            Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(10, 10, 24, exAlpha));
-        }
-        if (dangerRatio > 0.15) {
-            const barY = (frameTick * 13) % (SCREEN_H - 18);
-            Draw.rect(0, barY, SCREEN_W, 10, Color.new(210, 20, 20, Math.floor(dangerRatio * 78)));
-            if (ai.los && (frameTick % 14 < 7)) {
-                Draw.rect(0, 34, SCREEN_W, 4, Color.new(255, 30, 30, 95));
-                Draw.rect(0, SCREEN_H - 40, SCREEN_W, 4, Color.new(255, 30, 30, 95));
+        if (ENABLE_OVERLAYS) {
+            // Vineta de oscuridad / cansancio / peligro
+            if (!player.flashlightOn || player.battery <= 0.0) {
+                Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 8, 76));
             }
-        }
+            if (exhausted) {
+                const exAlpha = Math.floor(22 + Math.abs(Math.sin(frameTick * 0.14)) * 28);
+                Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(10, 10, 24, exAlpha));
+            }
+            if (dangerRatio > 0.15) {
+                const barY = (frameTick * 13) % (SCREEN_H - 18);
+                Draw.rect(0, barY, SCREEN_W, 10, Color.new(210, 20, 20, Math.floor(dangerRatio * 78)));
+                if (ai.los && (frameTick % 14 < 7)) {
+                    Draw.rect(0, 34, SCREEN_W, 4, Color.new(255, 30, 30, 95));
+                    Draw.rect(0, SCREEN_H - 40, SCREEN_W, 4, Color.new(255, 30, 30, 95));
+                }
+            }
 
-        // Flash de pickup / evento
-        if (flashTint.alpha > 0) {
-            Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(flashTint.r, flashTint.g, flashTint.b, Math.floor(flashTint.alpha)));
-            flashTint.alpha = Math.max(0, flashTint.alpha - 4);
+            // Flash de pickup / evento
+            if (flashTint.alpha > 0) {
+                Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(flashTint.r, flashTint.g, flashTint.b, Math.floor(flashTint.alpha)));
+                flashTint.alpha = Math.max(0, flashTint.alpha - 4);
+            }
         }
 
         // Plano PDA animado (solo visible al apretar SELECT / L2)
@@ -401,6 +411,17 @@ Screen.display(() => {
         fnt.print(305, 8, "STAMINA: " + Math.floor(player.stamina) + "%");
         fnt.color = Color.new(235, 235, 240, 128);
         fnt.print(445, 8, "PULSO: " + Math.floor(72 + dangerRatio * 118) + " BPM");
+
+        if (debugMode > 0) {
+            let fps = -1;
+            try { fps = Math.floor(Screen.getFPS(60)); } catch (_) {}
+            Draw.rect(0, 34, SCREEN_W, 20, Color.new(0, 0, 0, 110));
+            fnt.scale = Math.fround(0.45);
+            fnt.color = Color.new(120, 255, 120, 128);
+            fnt.print(8, 38, "X:" + player.x.toFixed(2) + " Y:" + player.y.toFixed(2) + " A:" + player.ang.toFixed(2) +
+                " COLS:" + renderStats.cols + " D:" + renderStats.minD.toFixed(1) + "-" + renderStats.maxD.toFixed(1) +
+                " FPS:" + fps + " M:" + debugMode);
+        }
 
         // Popup central de feedback
         if (popupTimer > 0) {
