@@ -1,7 +1,9 @@
-// Configuración de efectos de cámara, overlays y vibración DualShock 2
-export const ENABLE_BOB      = true; // balanceo/vaivén de cámara al caminar
-export const ENABLE_OVERLAYS = true; // rectángulos translúcidos a pantalla completa (flash de pickup, viñeta, cansancio, barra de peligro)
-export const ENABLE_RUMBLE   = true; // vibración del DualShock 2
+// Configuración gráfica, efectos de cámara, overlays y vibración DualShock 2
+export const ENABLE_BOB       = true; // balanceo/vaivén de cámara y linterna en mano al caminar
+export const ENABLE_OVERLAYS  = true; // viñeta Gouraud, partículas, scanlines VHS y distorsión de peligro
+export const ENABLE_RUMBLE    = true; // vibración del DualShock 2
+export const ENABLE_VIEWMODEL = true; // mano y linterna táctica 3D en primera persona
+export const ENABLE_PARTICLES = true; // partículas atmosféricas (polvo/esporas iluminadas por el haz)
 
 // En el fork de QuickJS de AthenaEnv V4 (src/quickjs/quickjs.c):
 // 1) Sumar INT + FLOAT64 con "+" o "+=" entra en js_add_slow y convierte el resultado en

@@ -179,10 +179,11 @@ Screen.display(() => {
 
     if (gameState === STATE_TITLE) {
         player.ang = toF64(frameTick * 0.006);
-        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.25, frameTick, false, 1.05, 1.0);
+        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.25, frameTick, false, 1.05, 1.0, 1.0);
 
         Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 0, 76));
-        Draw.rect(40, 38, SCREEN_W - 80, SCREEN_H - 76, Color.new(10, 4, 6, 108));
+        Draw.rect(36, 34, SCREEN_W - 72, SCREEN_H - 68, Color.new(45, 18, 22, 110));
+        Draw.rect(40, 38, SCREEN_W - 80, SCREEN_H - 76, Color.new(10, 4, 6, 118));
 
         fnt.scale = Math.fround(1.0);
         fnt.color = Color.new(240, 45, 45, 128);
@@ -371,12 +372,12 @@ Screen.display(() => {
             triggerRumble(255, 1);
         }
 
-        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, dangerRatio, frameTick, fusesCollected === 4, currentFov, flashlightWarmup);
+        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, dangerRatio, frameTick, fusesCollected === 4, currentFov, flashlightWarmup, mapAnim);
 
         if (ENABLE_OVERLAYS) {
             // Vineta de oscuridad / cansancio / peligro
             if (!player.flashlightOn || ((player.battery - 0.0) <= 0)) {
-                Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 8, 76));
+                Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 8, 72));
             }
             if (exhausted) {
                 const exAlpha = Math.floor(fadd(22.0, Math.abs(Math.sin(frameTick * 0.14)) * 28.0));
@@ -401,18 +402,55 @@ Screen.display(() => {
         // Plano PDA animado (solo visible al apretar SELECT / L2)
         renderAnimatedMapPDA(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, dangerRatio, mapAnim, frameTick, fnt);
 
-        // HUD Superior CRT/VHS
-        Draw.rect(0, 0, SCREEN_W, 34, Color.new(0, 0, 0, 92));
-        fnt.scale = Math.fround(0.52);
-        fnt.color = Color.new(235, 55, 55, 128);
-        if ((frameTick % 40) < 25) fnt.print(14, 8, "REC");
+        // HUD Superior CRT/VHS con barras graficas y monitor ECG
+        Draw.rect(0, 0, SCREEN_W, 34, Color.new(4, 6, 10, 112));
+        Draw.rect(0, 33, SCREEN_W, 1, Color.new(60, 80, 95, 110));
+        fnt.scale = Math.fround(0.50);
+        fnt.color = Color.new(245, 50, 50, 128);
+        if ((frameTick % 40) < 25) {
+            Draw.circle(14, 17, 4, Color.new(245, 40, 40, 128), true);
+            fnt.print(22, 8, "REC");
+        }
         fnt.color = Color.new(235, 235, 240, 128);
-        fnt.print(62, 8, "FUSIBLES: " + fusesCollected + "/4");
-        fnt.print(195, 8, "LUZ: " + Math.floor(player.battery) + "%");
+        fnt.print(68, 8, "FUSIBLES: " + fusesCollected + "/4");
+
+        // Barra visual de Bateria
+        fnt.print(192, 8, "LUZ:");
+        Draw.rect(236, 11, 54, 12, Color.new(20, 30, 38, 128));
+        const batFill = Math.max(0, Math.floor((player.battery / 100.0) * 50.0));
+        const batCol = ((player.battery - 25.0) < 0) ? Color.new(255, 80, 45, 128) : Color.new(55, 225, 255, 128);
+        if (batFill > 0) Draw.rect(238, 13, batFill, 8, batCol);
+
+        // Barra visual de Stamina
         fnt.color = exhausted ? Color.new(255, 95, 95, 128) : Color.new(235, 235, 240, 128);
-        fnt.print(305, 8, "STAMINA: " + Math.floor(player.stamina) + "%");
-        fnt.color = Color.new(235, 235, 240, 128);
-        fnt.print(445, 8, "PULSO: " + Math.floor(fadd(72.0, dangerRatio * 118.0)) + " BPM");
+        fnt.print(302, 8, "STAM:");
+        Draw.rect(354, 11, 54, 12, Color.new(25, 25, 32, 128));
+        const stamFill = Math.max(0, Math.floor((player.stamina / 100.0) * 50.0));
+        const stamCol = exhausted ? Color.new(255, 65, 65, 128) : Color.new(95, 240, 135, 128);
+        if (stamFill > 0) Draw.rect(356, 13, stamFill, 8, stamCol);
+
+        // Monitor de Pulso BPM + onda ECG en tiempo real
+        const bpm = Math.floor(fadd(72.0, dangerRatio * 118.0));
+        const ecgCol = ((dangerRatio - 0.45) > 0) ? Color.new(255, 65, 65, 128) : Color.new(90, 245, 130, 128);
+        fnt.color = ecgCol;
+        fnt.print(422, 8, "BPM:" + bpm);
+        const ecgBaseX = 505;
+        const ecgW = 120;
+        Draw.rect(ecgBaseX, 6, ecgW, 22, Color.new(6, 14, 10, 120));
+        const beatPeriod = Math.max(10, Math.floor(34.0 - dangerRatio * 18.0));
+        let prevEx = ecgBaseX;
+        let prevEy = 17;
+        for (let ex = 0; ex < ecgW; ex += 4) {
+            const ph = (ex + frameTick * 2) % beatPeriod;
+            let ey = 17;
+            if (ph === 2) ey = 13;
+            else if (ph === 4) ey = 7;
+            else if (ph === 6) ey = 25;
+            else if (ph === 8) ey = 14;
+            Draw.line(prevEx, prevEy, ecgBaseX + ex, ey, ecgCol);
+            prevEx = ecgBaseX + ex;
+            prevEy = ey;
+        }
 
         if (debugMode > 0) {
             let fps = -1;
@@ -434,7 +472,8 @@ Screen.display(() => {
         }
 
         // Banner inferior de radio / pista de plano
-        Draw.rect(0, SCREEN_H - 36, SCREEN_W, 36, Color.new(0, 0, 0, 95));
+        Draw.rect(0, SCREEN_H - 36, SCREEN_W, 36, Color.new(4, 6, 10, 112));
+        Draw.rect(0, SCREEN_H - 36, SCREEN_W, 1, Color.new(60, 80, 95, 110));
         fnt.scale = Math.fround(0.50);
         if (radioTimer > 0) {
             radioTimer--;
@@ -451,7 +490,7 @@ Screen.display(() => {
             fnt.print(14, SCREEN_H - 26, "Rejas abiertas. Junta los 4 fusibles (" + fusesCollected + "/4). [SELECT/L2: Plano]");
         }
     } else if (gameState === STATE_PAUSE) {
-        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.0, frameTick, fusesCollected === 4, currentFov, flashlightWarmup);
+        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.0, frameTick, fusesCollected === 4, currentFov, flashlightWarmup, mapAnim);
         Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 0, 96));
         fnt.scale = Math.fround(0.95);
         fnt.color = Color.new(240, 240, 245, 128);
@@ -463,20 +502,40 @@ Screen.display(() => {
     } else if (gameState === STATE_JUMPSCARE) {
         jumpscareTimer--;
         const flash = (jumpscareTimer % 4 < 2);
-        Draw.rect(0, 0, SCREEN_W, SCREEN_H, flash ? Color.new(180, 10, 10, 128) : Color.new(12, 0, 0, 128));
-        const jx = Math.floor((Math.random() - 0.5) * 28);
-        const jy = Math.floor((Math.random() - 0.5) * 28);
-        Draw.rect(170 + jx, 40 + jy, 300, 370, Color.new(20, 4, 6, 128));
-        Draw.rect(210 + jx, 60 + jy, 220, 180, Color.new(190, 155, 150, 128));
-        Draw.rect(245 + jx, 125 + jy, 45, 32, Color.new(255, 15, 15, 128));
-        Draw.rect(350 + jx, 125 + jy, 45, 32, Color.new(255, 15, 15, 128));
-        Draw.rect(260 + jx, 190 + jy, 120, 38, Color.new(10, 0, 0, 128));
+        Draw.rect(0, 0, SCREEN_W, SCREEN_H, flash ? Color.new(165, 8, 12, 128) : Color.new(10, 0, 2, 128));
+        const jx = Math.floor((Math.random() - 0.5) * 32);
+        const jy = Math.floor((Math.random() - 0.5) * 32);
+        // Silueta y craneo distorsionado en primer plano con colmillos y ojos incandescentes
+        Draw.rect(155 + jx, 35 + jy, 330, 390, Color.new(18, 4, 6, 128));
+        Draw.quad(
+            200 + jx, 50 + jy, 440 + jx, 50 + jy,
+            220 + jx, 260 + jy, 420 + jx, 260 + jy,
+            Color.new(205, 170, 162, 128), Color.new(205, 170, 162, 128),
+            Color.new(110, 65, 65, 128), Color.new(110, 65, 65, 128)
+        );
+        // Cuencas oculares y pupilas rojas brillantes
+        Draw.rect(232 + jx, 112 + jy, 64, 46, Color.new(12, 0, 2, 128));
+        Draw.rect(344 + jx, 112 + jy, 64, 46, Color.new(12, 0, 2, 128));
+        Draw.circle(264 + jx, 135 + jy, 14, Color.new(255, 25, 20, 128), true);
+        Draw.circle(376 + jx, 135 + jy, 14, Color.new(255, 25, 20, 128), true);
+        Draw.circle(264 + jx, 135 + jy, 6, Color.new(255, 235, 210, 128), true);
+        Draw.circle(376 + jx, 135 + jy, 6, Color.new(255, 235, 210, 128), true);
+        // Fauces abiertas con dientes
+        Draw.rect(245 + jx, 185 + jy, 150, 62, Color.new(10, 0, 2, 128));
+        for (let t = 0; t < 6; t++) {
+            const tx = 252 + jx + t * 24;
+            Draw.triangle(tx, 185 + jy, tx + 16, 185 + jy, tx + 8, 206 + jy, Color.new(225, 205, 195, 128));
+            Draw.triangle(tx, 247 + jy, tx + 16, 247 + jy, tx + 8, 226 + jy, Color.new(225, 205, 195, 128));
+        }
         if (jumpscareTimer <= 0) {
             triggerRumble(0, 0);
             gameState = STATE_DEAD;
         }
     } else if (gameState === STATE_WIN) {
-        Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(6, 28, 12, 128));
+        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.0, frameTick, true, 1.05, 1.0, 1.0);
+        Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(4, 24, 10, 96));
+        Draw.rect(80, 95, SCREEN_W - 160, 220, Color.new(8, 32, 16, 118));
+        Draw.rect(84, 99, SCREEN_W - 168, 212, Color.new(4, 14, 8, 124));
         const secs = Math.floor(elapsedFrames / 60);
         fnt.scale = Math.fround(0.95);
         fnt.color = Color.new(110, 255, 140, 128);
@@ -490,7 +549,10 @@ Screen.display(() => {
             gameState = STATE_PLAY;
         }
     } else if (gameState === STATE_DEAD) {
-        Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(50, 0, 0, 128));
+        render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 1.0, frameTick, fusesCollected === 4, 1.15, 0.25, 1.0);
+        Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(45, 0, 4, 102));
+        Draw.rect(70, 105, SCREEN_W - 140, 210, Color.new(60, 12, 16, 118));
+        Draw.rect(74, 109, SCREEN_W - 148, 202, Color.new(18, 2, 4, 124));
         fnt.scale = Math.fround(1.0);
         fnt.color = Color.new(255, 60, 60, 128);
         fnt.print(140, 140, "SENAL PERDIDA - TE ALCANZO");
