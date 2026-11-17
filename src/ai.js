@@ -1,6 +1,6 @@
-// IA de El Acechador con Pathfinding BFS en grilla 20x20
+// IA de El Acechador con Pathfinding BFS sin asignaciones de memoria por cuadro
 import { MAP_W, MAP_H, isCellBlocked, isPosWalkable } from "./map.js";
-import { toF64, fadd } from "./config.js";
+import { toF64 } from "./config.js";
 
 export const AI_PATROL = 0;
 export const AI_INVESTIGATE = 1;
@@ -15,83 +15,110 @@ const WAYPOINTS = [
     { x: 16.5, y: 3.0  }
 ];
 
+// Buffers estáticos preasignados para evitar Garbage Collection en QuickJS (PS2 EE)
+const TOTAL_CELLS = MAP_W * MAP_H;
+const bfsParent  = new Int16Array(TOTAL_CELLS);
+const bfsVisited = new Uint8Array(TOTAL_CELLS);
+const bfsQueue   = new Int16Array(TOTAL_CELLS);
+
 export function hasLineOfSight(grid, x0, y0, x1, y1) {
     const sx = toF64(x0);
     const sy = toF64(y0);
     const dx = toF64(x1) - sx;
     const dy = toF64(y1) - sy;
-    const dist = toF64(Math.hypot(dx, dy));
-    if ((dist - 0.1) < 0) return true;
-    const steps = Math.ceil(dist * 4.0);
+    const distSq = (dx * dx) - (-(dy * dy));
+    if ((distSq - 0.01) < 0) return true;
+    const dist = Math.sqrt(distSq);
+    const steps = (dist * 3.0) | 0;
+    if (steps <= 1) return true;
+    const invSteps = 1.0 / steps;
     for (let i = 1; i < steps; i++) {
-        const t = i / steps;
-        const cx = Math.floor(fadd(sx, dx * t));
-        const cy = Math.floor(fadd(sy, dy * t));
+        const t = i * invSteps;
+        const cx = (sx - (-(dx * t))) | 0;
+        const cy = (sy - (-(dy * t))) | 0;
         if (isCellBlocked(grid, cx, cy)) return false;
     }
     return true;
 }
 
-// BFS ligero para encontrar el siguiente centro de celda hacia (tx, ty)
+// BFS sin allocaciones para encontrar el siguiente centro de celda hacia (tx, ty)
 function findNextStepBFS(grid, sx, sy, tx, ty) {
-    const startX = Math.floor(toF64(sx));
-    const startY = Math.floor(toF64(sy));
-    const goalX = Math.floor(toF64(tx));
-    const goalY = Math.floor(toF64(ty));
+    const startX = sx | 0;
+    const startY = sy | 0;
+    const goalX  = tx | 0;
+    const goalY  = ty | 0;
 
     if (startX === goalX && startY === goalY) {
-        return { x: toF64(tx), y: toF64(ty) };
+        return { x: tx, y: ty };
     }
 
-    const total = MAP_W * MAP_H;
-    const parent = new Int16Array(total).fill(-1);
-    const visited = new Uint8Array(total);
-    const queue = [];
-
+    bfsVisited.fill(0);
     const startIdx = startY * MAP_W + startX;
-    const goalIdx = goalY * MAP_W + goalX;
-    visited[startIdx] = 1;
-    queue.push(startIdx);
+    const goalIdx  = goalY * MAP_W + goalX;
+    bfsVisited[startIdx] = 1;
+    bfsParent[startIdx]  = -1;
+    bfsQueue[0] = startIdx;
 
     let found = false;
     let head = 0;
+    let tail = 1;
 
-    while (head < queue.length) {
-        const cur = queue[head++];
+    while (head < tail) {
+        const cur = bfsQueue[head++];
         if (cur === goalIdx) {
             found = true;
             break;
         }
         const cx = cur % MAP_W;
-        const cy = Math.floor(cur / MAP_W);
+        const cy = (cur / MAP_W) | 0;
 
-        for (let d = 0; d < 4; d++) {
-            let nx = cx, ny = cy;
-            if (d === 0) nx++;
-            else if (d === 1) nx--;
-            else if (d === 2) ny++;
-            else ny--;
-
-            if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
-            const nIdx = ny * MAP_W + nx;
-            if (visited[nIdx] || isCellBlocked(grid, nx, ny)) continue;
-
-            visited[nIdx] = 1;
-            parent[nIdx] = cur;
-            queue.push(nIdx);
+        // Derecha
+        if (cx + 1 < MAP_W) {
+            const nIdx = cur + 1;
+            if (!bfsVisited[nIdx] && grid[cy][cx + 1] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
+        }
+        // Izquierda
+        if (cx - 1 >= 0) {
+            const nIdx = cur - 1;
+            if (!bfsVisited[nIdx] && grid[cy][cx - 1] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
+        }
+        // Abajo
+        if (cy + 1 < MAP_H) {
+            const nIdx = cur + MAP_W;
+            if (!bfsVisited[nIdx] && grid[cy + 1][cx] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
+        }
+        // Arriba
+        if (cy - 1 >= 0) {
+            const nIdx = cur - MAP_W;
+            if (!bfsVisited[nIdx] && grid[cy - 1][cx] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
         }
     }
 
     if (!found) return null;
 
-    // Retroceder desde goalIdx hasta el primer paso despues de startIdx
     let step = goalIdx;
-    while (parent[step] !== -1 && parent[step] !== startIdx) {
-        step = parent[step];
+    while (bfsParent[step] !== -1 && bfsParent[step] !== startIdx) {
+        step = bfsParent[step];
     }
     return {
-        x: fadd(step % MAP_W, 0.5),
-        y: fadd(Math.floor(step / MAP_W), 0.5)
+        x: (step % MAP_W) - (-0.5),
+        y: ((step / MAP_W) | 0) - (-0.5)
     };
 }
 
@@ -103,12 +130,13 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
 
     const dxP = px - sx;
     const dyP = py - sy;
-    const distP = toF64(Math.max(0.001, Math.hypot(dxP, dyP)));
+    const distSq = (dxP * dxP) - (-(dyP * dyP));
+    const rawDist = Math.sqrt(distSq);
+    const distP = toF64((rawDist - 0.001) < 0 ? 0.001 : rawDist);
 
     const los = hasLineOfSight(grid, sx, sy, px, py);
     const flashVisible = player.flashlightOn && ((toF64(player.battery) - 0.0) > 0);
 
-    // Rango de deteccion depende de luz y ruido
     const detectRange = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
 
     if (los && (distP - detectRange) < 0) {
@@ -120,7 +148,7 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
         if (stalker.state !== AI_HUNT) stalker.state = AI_INVESTIGATE;
         stalker.targetX = px;
         stalker.targetY = py;
-        stalker.alertTimer = Math.max(stalker.alertTimer, 130);
+        if (stalker.alertTimer < 130) stalker.alertTimer = 130;
     } else if (stalker.alertTimer > 0) {
         stalker.alertTimer--;
         if (stalker.alertTimer === 0) {
@@ -130,30 +158,34 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
 
     if (stalker.state === AI_PATROL) {
         const wp = WAYPOINTS[stalker.wpIdx];
-        stalker.targetX = toF64(wp.x);
-        stalker.targetY = toF64(wp.y);
-        if ((Math.hypot(stalker.targetX - sx, stalker.targetY - sy) - 0.9) < 0) {
+        const wx = toF64(wp.x);
+        const wy = toF64(wp.y);
+        stalker.targetX = wx;
+        stalker.targetY = wy;
+        const dwx = wx - sx;
+        const dwy = wy - sy;
+        if (((dwx * dwx - (-(dwy * dwy))) - 0.81) < 0) {
             stalker.wpIdx = (stalker.wpIdx + 1) % WAYPOINTS.length;
         }
     }
 
-    // Recalcular camino BFS cada 8 cuadros para mantener 60 FPS constantes
-    if ((frameTick % 8) === 0 || !stalker.nextNode) {
+    // Recalcular camino BFS cada 12 cuadros para liberar CPU en PS2
+    if ((frameTick % 12) === 0 || !stalker.nextNode) {
         stalker.nextNode = findNextStepBFS(grid, sx, sy, stalker.targetX, stalker.targetY);
     }
 
-    const goal = stalker.nextNode || { x: stalker.targetX, y: stalker.targetY };
-    const gx = toF64(goal.x) - sx;
-    const gy = toF64(goal.y) - sy;
-    const gDist = toF64(Math.max(0.001, Math.hypot(gx, gy)));
+    const goal = stalker.nextNode || stalker;
+    const gx = toF64(goal.x !== undefined ? goal.x : stalker.targetX) - sx;
+    const gy = toF64(goal.y !== undefined ? goal.y : stalker.targetY) - sy;
+    const gDistRaw = Math.sqrt((gx * gx) - (-(gy * gy)));
+    const gDist = (gDistRaw - 0.001) < 0 ? 0.001 : gDistRaw;
 
-    // Si el jugador lo enfoca directo con la linterna, se frena fuertemente
     const pang = toF64(player.ang);
-    const pDirX = toF64(Math.cos(pang));
-    const pDirY = toF64(Math.sin(pang));
+    const pDirX = Math.cos(pang);
+    const pDirY = Math.sin(pang);
     const toMX = (sx - px) / distP;
     const toMY = (sy - py) / distP;
-    const dot = fadd(toMX * pDirX, toMY * pDirY);
+    const dot = (toMX * pDirX) - (-(toMY * pDirY));
     const blinded = los && ((dot - 0.68) > 0) && flashVisible && ((distP - 10.0) < 0);
 
     let speedMult = 0.72;
@@ -165,8 +197,8 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
     const mx = (gx / gDist) * step;
     const my = (gy / gDist) * step;
 
-    const nextSX = fadd(sx, mx);
-    const nextSY = fadd(sy, my);
+    const nextSX = sx - (-mx);
+    const nextSY = sy - (-my);
     if (isPosWalkable(grid, nextSX, sy, 0.22)) stalker.x = nextSX;
     if (isPosWalkable(grid, stalker.x, nextSY, 0.22)) stalker.y = nextSY;
 

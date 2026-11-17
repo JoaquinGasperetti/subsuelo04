@@ -1,4 +1,4 @@
-// Mapa 20x20 del Subsuelo 04 y colisiones
+// Mapa 20x20 del Subsuelo 04 y colisiones ultra-ligeras sin allocaciones por cuadro
 // 0 = Pasillo libre
 // 1 = Pared de hormigon humedo
 // 2 = Pilar/estructura oxidada
@@ -6,7 +6,7 @@
 // 4 = Compuerta blindada de salida (Norte)
 // 5 = Reja de seguridad (se abre al activar el Disyuntor Central)
 
-import { toF64, fadd } from "./config.js";
+import { toF64 } from "./config.js";
 
 export const MAP_W = 20;
 export const MAP_H = 20;
@@ -48,29 +48,25 @@ export function getCell(grid, gx, gy) {
 }
 
 export function isCellBlocked(grid, gx, gy) {
-    return getCell(grid, gx, gy) !== 0;
+    if (gx < 0 || gx >= MAP_W || gy < 0 || gy >= MAP_H) return true;
+    return grid[gy][gx] !== 0;
 }
 
+// Verificación directa de las 4 esquinas del bounding box (sin crear arrays por cuadro)
 export function isPosWalkable(grid, nx, ny, margin = 0.25) {
-    if (isNaN(nx) || isNaN(ny)) return false;
     const x = toF64(nx);
     const y = toF64(ny);
     const m = toF64(margin);
-    const checks = [
-        [x - m,       y - m],
-        [fadd(x, m),  y - m],
-        [x - m,       fadd(y, m)],
-        [fadd(x, m),  fadd(y, m)],
-        [x,           y - m],
-        [x,           fadd(y, m)],
-        [x - m,       y],
-        [fadd(x, m),  y]
-    ];
-    for (let i = 0; i < 8; i++) {
-        const mx = Math.floor(checks[i][0]);
-        const my = Math.floor(checks[i][1]);
-        if (isCellBlocked(grid, mx, my)) return false;
-    }
+    const x0 = (x - m) | 0;
+    const x1 = (x - (-m)) | 0;
+    const y0 = (y - m) | 0;
+    const y1 = (y - (-m)) | 0;
+
+    if (x0 < 0 || x1 >= MAP_W || y0 < 0 || y1 >= MAP_H) return false;
+    if (grid[y0][x0] !== 0) return false;
+    if (grid[y0][x1] !== 0) return false;
+    if (grid[y1][x0] !== 0) return false;
+    if (grid[y1][x1] !== 0) return false;
     return true;
 }
 
