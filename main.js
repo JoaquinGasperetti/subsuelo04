@@ -5,7 +5,7 @@
 import { createWorldGrid, isPosWalkable, getCell, LORE_MESSAGES } from "./src/map.js";
 import { AI_PATROL, updateStalkerAI } from "./src/ai.js";
 import { render3DWorld, renderAnimatedMapPDA, renderStats } from "./src/renderer.js";
-import { ENABLE_OVERLAYS, ENABLE_RUMBLE } from "./src/config.js";
+import { ENABLE_OVERLAYS, ENABLE_RUMBLE, F64_ZERO, toF64, fadd } from "./src/config.js";
 
 const { width: SCREEN_W, height: SCREEN_H } = Screen.getMode();
 Screen.setVSync(true);
@@ -30,7 +30,7 @@ let elapsedFrames = 0;
 
 // Mapa PDA (cerrado por defecto, animacion suave al abrir/cerrar)
 let mapOpen = false;
-let mapAnim = 0.0;
+let mapAnim = toF64(0.0);
 
 // Gamefeel: flashes, fov dinamico, cansancio y alertas
 let flashTint = { r: 0, g: 0, b: 0, alpha: 0 };
@@ -38,8 +38,8 @@ let popupText = "";
 let popupTimer = 0;
 let radioText = "";
 let radioTimer = 0;
-let currentFov = 1.05;
-let flashlightWarmup = 1.0;
+let currentFov = toF64(1.05);
+let flashlightWarmup = toF64(1.0);
 let exhausted = false;
 let bumpCooldown = 0;
 let debugMode = 0; // CROSS en juego: 0 apagado, 1 datos, 2 datos + paredes magenta
@@ -49,22 +49,22 @@ let breakerActive = false;
 let fusesCollected = 0;
 
 const player = {
-    x: 10.0,
-    y: 1.8,
-    ang: Math.PI * 0.5,
-    bobPhase: 0.0,
-    battery: 100.0,
+    x: toF64(10.0),
+    y: toF64(1.8),
+    ang: toF64(Math.PI * 0.5),
+    bobPhase: toF64(0.0),
+    battery: toF64(100.0),
     flashlightOn: true,
-    stamina: 100.0
+    stamina: toF64(100.0)
 };
 
 const stalker = {
-    x: 10.0,
-    y: 15.5,
-    baseSpeed: 0.024,
+    x: toF64(10.0),
+    y: toF64(15.5),
+    baseSpeed: toF64(0.024),
     state: AI_PATROL,
-    targetX: 10.0,
-    targetY: 10.0,
+    targetX: toF64(10.0),
+    targetY: toF64(10.0),
     alertTimer: 0,
     wpIdx: 0,
     nextNode: null
@@ -110,48 +110,48 @@ function resetGame() {
     fusesCollected = 0;
     elapsedFrames = 0;
     mapOpen = false;
-    mapAnim = 0.0;
-    currentFov = 1.05;
-    flashlightWarmup = 1.0;
+    mapAnim = toF64(0.0);
+    currentFov = toF64(1.05);
+    flashlightWarmup = toF64(1.0);
     exhausted = false;
     bumpCooldown = 0;
     flashTint.alpha = 0;
     popupTimer = 0;
 
-    player.x = 10.0;
-    player.y = 1.8;
-    player.ang = Math.PI * 0.5;
-    player.bobPhase = 0.0;
-    player.battery = 100.0;
+    player.x = toF64(10.0);
+    player.y = toF64(1.8);
+    player.ang = toF64(Math.PI * 0.5);
+    player.bobPhase = toF64(0.0);
+    player.battery = toF64(100.0);
     player.flashlightOn = true;
-    player.stamina = 100.0;
+    player.stamina = toF64(100.0);
 
-    stalker.x = 10.5;
-    stalker.y = 16.5;
-    stalker.baseSpeed = 0.024;
+    stalker.x = toF64(10.5);
+    stalker.y = toF64(16.5);
+    stalker.baseSpeed = toF64(0.024);
     stalker.state = AI_PATROL;
-    stalker.targetX = 10.0;
-    stalker.targetY = 10.0;
+    stalker.targetX = toF64(10.0);
+    stalker.targetY = toF64(10.0);
     stalker.alertTimer = 0;
     stalker.wpIdx = 0;
     stalker.nextNode = null;
 
     entities = [
-        { kind: "fuse", x: 10.0, y: 17.5, taken: false },
-        { kind: "fuse", x: 10.0, y: 9.5,  taken: false },
-        { kind: "fuse", x: 2.5,  y: 17.5, taken: false },
-        { kind: "fuse", x: 17.5, y: 17.5, taken: false },
+        { kind: "fuse", x: toF64(10.0), y: toF64(17.5), taken: false },
+        { kind: "fuse", x: toF64(10.0), y: toF64(9.5),  taken: false },
+        { kind: "fuse", x: toF64(2.5),  y: toF64(17.5), taken: false },
+        { kind: "fuse", x: toF64(17.5), y: toF64(17.5), taken: false },
 
-        { kind: "breaker", x: 10.0, y: 11.5, taken: false },
+        { kind: "breaker", x: toF64(10.0), y: toF64(11.5), taken: false },
 
-        { kind: "battery", x: 8.5,  y: 5.5,  taken: false },
-        { kind: "battery", x: 1.5,  y: 2.5,  taken: false },
-        { kind: "battery", x: 18.5, y: 2.5,  taken: false },
+        { kind: "battery", x: toF64(8.5),  y: toF64(5.5),  taken: false },
+        { kind: "battery", x: toF64(1.5),  y: toF64(2.5),  taken: false },
+        { kind: "battery", x: toF64(18.5), y: toF64(2.5),  taken: false },
 
-        { kind: "note", x: 10.0, y: 3.5,  taken: false, msgIdx: 0 },
-        { kind: "note", x: 8.5,  y: 14.5, taken: false, msgIdx: 1 },
-        { kind: "note", x: 3.5,  y: 8.5,  taken: false, msgIdx: 2 },
-        { kind: "note", x: 16.5, y: 8.5,  taken: false, msgIdx: 3 }
+        { kind: "note", x: toF64(10.0), y: toF64(3.5),  taken: false, msgIdx: 0 },
+        { kind: "note", x: toF64(8.5),  y: toF64(14.5), taken: false, msgIdx: 1 },
+        { kind: "note", x: toF64(3.5),  y: toF64(8.5),  taken: false, msgIdx: 2 },
+        { kind: "note", x: toF64(16.5), y: toF64(8.5),  taken: false, msgIdx: 3 }
     ];
 
     showRadio("OBJETIVO: Activa el Disyuntor rojo, junta 4 Fusibles y escapa al Norte.", 260);
@@ -178,7 +178,7 @@ Screen.display(() => {
     pad.update();
 
     if (gameState === STATE_TITLE) {
-        player.ang = frameTick * 0.006;
+        player.ang = toF64(frameTick * 0.006);
         render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.25, frameTick, false, 1.05, 1.0);
 
         Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 0, 76));
@@ -229,69 +229,71 @@ Screen.display(() => {
         }
         if (pad.justPressed(Pads.TRIANGLE)) {
             player.flashlightOn = !player.flashlightOn;
-            if (player.flashlightOn) flashlightWarmup = 0.25;
+            if (player.flashlightOn) flashlightWarmup = toF64(0.25);
         }
 
         // Animacion suave del plano PDA
-        if (mapOpen) mapAnim = Math.min(1.0, mapAnim + 0.11);
-        else mapAnim = Math.max(0.0, mapAnim - 0.13);
+        if (mapOpen) mapAnim = toF64(Math.min(1.0, fadd(mapAnim, 0.11)));
+        else mapAnim = toF64(Math.max(0.0, mapAnim - 0.13));
 
         // Warmup de linterna al encender
-        if (flashlightWarmup < 1.0) {
-            flashlightWarmup = Math.min(1.0, flashlightWarmup + 0.14);
+        if ((flashlightWarmup - 1.0) < 0) {
+            flashlightWarmup = toF64(Math.min(1.0, fadd(flashlightWarmup, 0.14)));
         }
 
         // Rotacion
-        const rx = (pad.rx || 0) / 128.0;
+        const rx = toF64((pad.rx || 0) / 128.0);
         const turnSpeed = mapOpen ? 0.036 : 0.052;
-        if (Math.abs(rx) > 0.18) player.ang += rx * turnSpeed;
-        if (pad.pressed(Pads.L1)) player.ang -= turnSpeed;
-        if (pad.pressed(Pads.R1)) player.ang += turnSpeed;
-        if (player.ang > Math.PI) player.ang -= Math.PI * 2.0;
-        else if (player.ang < -Math.PI) player.ang += Math.PI * 2.0;
+        if ((Math.abs(rx) - 0.18) > 0) player.ang = fadd(player.ang, rx * turnSpeed);
+        if (pad.pressed(Pads.L1)) player.ang = player.ang - turnSpeed;
+        if (pad.pressed(Pads.R1)) player.ang = fadd(player.ang, turnSpeed);
+        if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
+        else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
 
         // Movimiento
-        let fwd = 0.0, strafe = 0.0;
-        const lx = (pad.lx || 0) / 128.0;
-        const ly = (pad.ly || 0) / 128.0;
-        if (Math.abs(ly) > 0.18) fwd = -ly;
-        if (Math.abs(lx) > 0.18) strafe = lx;
-        if (pad.pressed(Pads.UP)) fwd = 1.0;
-        if (pad.pressed(Pads.DOWN)) fwd = -1.0;
-        if (pad.pressed(Pads.LEFT)) strafe = -1.0;
-        if (pad.pressed(Pads.RIGHT)) strafe = 1.0;
+        let fwd = F64_ZERO, strafe = F64_ZERO;
+        const lx = toF64((pad.lx || 0) / 128.0);
+        const ly = toF64((pad.ly || 0) / 128.0);
+        if ((Math.abs(ly) - 0.18) > 0) fwd = -ly;
+        if ((Math.abs(lx) - 0.18) > 0) strafe = lx;
+        if (pad.pressed(Pads.UP)) fwd = toF64(1.0);
+        if (pad.pressed(Pads.DOWN)) fwd = toF64(-1.0);
+        if (pad.pressed(Pads.LEFT)) strafe = toF64(-1.0);
+        if (pad.pressed(Pads.RIGHT)) strafe = toF64(1.0);
 
-        const isMoving = Math.abs(fwd) > 0.05 || Math.abs(strafe) > 0.05;
+        const isMoving = ((Math.abs(fwd) - 0.05) > 0) || ((Math.abs(strafe) - 0.05) > 0);
         const wantSprint = (pad.pressed(Pads.CIRCLE) || pad.pressed(Pads.SQUARE)) && isMoving && !mapOpen;
-        const isSprinting = wantSprint && !exhausted && player.stamina > 2.0;
+        const isSprinting = wantSprint && !exhausted && ((player.stamina - 2.0) > 0);
 
         if (isSprinting) {
-            player.stamina = Math.max(0.0, player.stamina - 0.45);
-            if (player.stamina <= 2.0) exhausted = true;
+            player.stamina = toF64(Math.max(0.0, player.stamina - 0.45));
+            if ((player.stamina - 2.0) <= 0) exhausted = true;
         } else {
-            player.stamina = Math.min(100.0, player.stamina + (exhausted ? 0.18 : 0.26));
-            if (exhausted && player.stamina >= 32.0) exhausted = false;
+            player.stamina = toF64(Math.min(100.0, fadd(player.stamina, exhausted ? 0.18 : 0.26)));
+            if (exhausted && ((player.stamina - 32.0) >= 0)) exhausted = false;
         }
 
         // FOV dinamico al correr
         const targetFov = isSprinting ? 1.15 : 1.05;
-        currentFov += (targetFov - currentFov) * 0.14;
+        currentFov = fadd(currentFov, (targetFov - currentFov) * 0.14);
 
         const speed = isSprinting ? 0.082 : (mapOpen ? 0.032 : 0.048);
-        const dirX = Math.cos(player.ang);
-        const dirY = Math.sin(player.ang);
+        const dirX = toF64(Math.cos(player.ang));
+        const dirY = toF64(Math.sin(player.ang));
         const dx = (dirX * fwd - dirY * strafe) * speed;
-        const dy = (dirY * fwd + dirX * strafe) * speed;
+        const dy = fadd(dirY * fwd, dirX * strafe) * speed;
 
         let bumpedGate = false;
-        if (isPosWalkable(worldGrid, player.x + dx, player.y, 0.25)) {
-            player.x += dx;
-        } else if (getCell(worldGrid, Math.floor(player.x + dx + (dx > 0 ? 0.28 : -0.28)), Math.floor(player.y)) === 5) {
+        const nextX = fadd(player.x, dx);
+        if (isPosWalkable(worldGrid, nextX, player.y, 0.25)) {
+            player.x = nextX;
+        } else if (getCell(worldGrid, Math.floor(fadd(nextX, (dx > 0) ? 0.28 : -0.28)), Math.floor(player.y)) === 5) {
             bumpedGate = true;
         }
-        if (isPosWalkable(worldGrid, player.x, player.y + dy, 0.25)) {
-            player.y += dy;
-        } else if (getCell(worldGrid, Math.floor(player.x), Math.floor(player.y + dy + (dy > 0 ? 0.28 : -0.28))) === 5) {
+        const nextY = fadd(player.y, dy);
+        if (isPosWalkable(worldGrid, player.x, nextY, 0.25)) {
+            player.y = nextY;
+        } else if (getCell(worldGrid, Math.floor(player.x), Math.floor(fadd(nextY, (dy > 0) ? 0.28 : -0.28))) === 5) {
             bumpedGate = true;
         }
         if (bumpCooldown > 0) bumpCooldown--;
@@ -303,28 +305,28 @@ Screen.display(() => {
         }
 
         if (isMoving) {
-            player.bobPhase += isSprinting ? 0.28 : 0.16;
+            player.bobPhase = fadd(player.bobPhase, isSprinting ? 0.28 : 0.16);
         }
 
-        if (player.flashlightOn && player.battery > 0.0) {
-            player.battery = Math.max(0.0, player.battery - 0.018);
+        if (player.flashlightOn && ((player.battery - 0.0) > 0)) {
+            player.battery = toF64(Math.max(0.0, player.battery - 0.018));
         }
 
         // Recoger entidades con feedback visual y tactil
         for (let i = 0; i < entities.length; i++) {
             const e = entities[i];
             if (e.taken) continue;
-            if (Math.hypot(player.x - e.x, player.y - e.y) < 0.90) {
+            if ((Math.hypot(player.x - toF64(e.x), player.y - toF64(e.y)) - 0.90) < 0) {
                 e.taken = true;
                 if (e.kind === "fuse") {
                     fusesCollected++;
-                    stalker.baseSpeed += 0.003;
+                    stalker.baseSpeed = fadd(stalker.baseSpeed, 0.003);
                     triggerScreenFlash(255, 200, 50, 56);
                     triggerRumble(160, 1);
                     showPopup("+1 FUSIBLE (" + fusesCollected + "/4)");
                     showRadio("FUSIBLE RECOLECTADO (" + fusesCollected + "/4). El Acechador se agita...", 190);
                 } else if (e.kind === "battery") {
-                    player.battery = Math.min(100.0, player.battery + 45.0);
+                    player.battery = toF64(Math.min(100.0, fadd(player.battery, 45.0)));
                     triggerScreenFlash(50, 220, 255, 48);
                     triggerRumble(90, 1);
                     showPopup("+45% BATERIA");
@@ -348,22 +350,22 @@ Screen.display(() => {
             }
         }
 
-        if (fusesCollected === 4 && player.y < 1.45 && player.x > 8.5 && player.x < 11.5) {
+        if (fusesCollected === 4 && ((player.y - 1.45) < 0) && ((player.x - 8.5) > 0) && ((player.x - 11.5) < 0)) {
             triggerRumble(0, 0);
             gameState = STATE_WIN;
         }
 
         const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick);
-        const dangerRatio = Math.max(0.0, Math.min(1.0, (7.0 - ai.distP) / 7.0));
+        const dangerRatio = toF64(Math.max(0.0, Math.min(1.0, (7.0 - toF64(ai.distP)) / 7.0)));
 
         // Latido por vibracion DualShock 2
-        if (dangerRatio > 0.28 && (frameTick % Math.max(12, Math.floor(38 - dangerRatio * 24)) < 4)) {
-            triggerRumble(Math.floor(dangerRatio * 185), 1);
+        if (((dangerRatio - 0.28) > 0) && (frameTick % Math.max(12, Math.floor(38.0 - dangerRatio * 24.0)) < 4)) {
+            triggerRumble(Math.floor(dangerRatio * 185.0), 1);
         } else if (bumpCooldown < 52) {
             triggerRumble(0, 0);
         }
 
-        if (ai.distP < 0.65) {
+        if ((toF64(ai.distP) - 0.65) < 0) {
             jumpscareTimer = 42;
             gameState = STATE_JUMPSCARE;
             triggerRumble(255, 1);
@@ -373,16 +375,16 @@ Screen.display(() => {
 
         if (ENABLE_OVERLAYS) {
             // Vineta de oscuridad / cansancio / peligro
-            if (!player.flashlightOn || player.battery <= 0.0) {
+            if (!player.flashlightOn || ((player.battery - 0.0) <= 0)) {
                 Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(0, 0, 8, 76));
             }
             if (exhausted) {
-                const exAlpha = Math.floor(22 + Math.abs(Math.sin(frameTick * 0.14)) * 28);
+                const exAlpha = Math.floor(fadd(22.0, Math.abs(Math.sin(frameTick * 0.14)) * 28.0));
                 Draw.rect(0, 0, SCREEN_W, SCREEN_H, Color.new(10, 10, 24, exAlpha));
             }
-            if (dangerRatio > 0.15) {
+            if ((dangerRatio - 0.15) > 0) {
                 const barY = (frameTick * 13) % (SCREEN_H - 18);
-                Draw.rect(0, barY, SCREEN_W, 10, Color.new(210, 20, 20, Math.floor(dangerRatio * 78)));
+                Draw.rect(0, barY, SCREEN_W, 10, Color.new(210, 20, 20, Math.floor(dangerRatio * 78.0)));
                 if (ai.los && (frameTick % 14 < 7)) {
                     Draw.rect(0, 34, SCREEN_W, 4, Color.new(255, 30, 30, 95));
                     Draw.rect(0, SCREEN_H - 40, SCREEN_W, 4, Color.new(255, 30, 30, 95));
@@ -410,7 +412,7 @@ Screen.display(() => {
         fnt.color = exhausted ? Color.new(255, 95, 95, 128) : Color.new(235, 235, 240, 128);
         fnt.print(305, 8, "STAMINA: " + Math.floor(player.stamina) + "%");
         fnt.color = Color.new(235, 235, 240, 128);
-        fnt.print(445, 8, "PULSO: " + Math.floor(72 + dangerRatio * 118) + " BPM");
+        fnt.print(445, 8, "PULSO: " + Math.floor(fadd(72.0, dangerRatio * 118.0)) + " BPM");
 
         if (debugMode > 0) {
             let fps = -1;

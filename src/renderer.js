@@ -1,71 +1,86 @@
 // Renderizador 3D Raycaster de 160 columnas + PDA Tactico Animado
 import { MAP_W, MAP_H } from "./map.js";
-import { ENABLE_BOB } from "./config.js";
+import { ENABLE_BOB, F64_ZERO, toF64, fadd } from "./config.js";
 
 export const NUM_RAYS = 160;
-const zBuffer = new Float32Array(NUM_RAYS);
+// Se usa Float64Array en lugar de Float32Array para evitar que QuickJS de AthenaEnv
+// devuelva JS_CUSTOM_TAG_FLOAT32 al leer zBuffer[i] y falle al compararlo con FLOAT64.
+const zBuffer = new Float64Array(NUM_RAYS);
 
 // Diagnostico: estadisticas del ultimo frame y modo de color de paredes (0 normal, 1 magenta plano)
 export const renderStats = { cols: 0, minD: 99.0, maxD: 0.0, wallMode: 0 };
 
 export function render3DWorld(screenW, screenH, grid, player, stalker, entities, dangerRatio, frameTick, breakerActive, fov, flashIntensity) {
+    const px = toF64(player.x);
+    const py = toF64(player.y);
+    const pang = toF64(player.ang);
+    const pbob = toF64(player.bobPhase);
+    const pbat = toF64(player.battery);
+    const dRatio = toF64(dangerRatio);
+    const fovVal = toF64(fov);
+    const fInt = toF64(flashIntensity);
+
     const colW = Math.floor(screenW / NUM_RAYS);
-    const bobOffset = ENABLE_BOB ? Math.floor(Math.sin(player.bobPhase) * 6.5) : 0;
-    const swayOffset = ENABLE_BOB ? Math.floor(Math.cos(player.bobPhase * 0.5) * 3.0) : 0;
-    const panicShakeY = (ENABLE_BOB && dangerRatio > 0.30) ? Math.floor((Math.random() - 0.5) * 7.0 * dangerRatio) : 0;
-    const panicShakeX = (ENABLE_BOB && dangerRatio > 0.45) ? Math.floor((Math.random() - 0.5) * 4.0 * dangerRatio) : 0;
+    const bobOffset = ENABLE_BOB ? Math.floor(Math.sin(pbob) * 6.5) : 0;
+    const swayOffset = ENABLE_BOB ? Math.floor(Math.cos(pbob * 0.5) * 3.0) : 0;
+    const panicShakeY = (ENABLE_BOB && (dRatio - 0.30) > 0) ? Math.floor((Math.random() - 0.5) * 7.0 * dRatio) : 0;
+    const panicShakeX = (ENABLE_BOB && (dRatio - 0.45) > 0) ? Math.floor((Math.random() - 0.5) * 4.0 * dRatio) : 0;
     const halfH = Math.floor(screenH * 0.5) + bobOffset + panicShakeY;
 
     // 1. Techo y piso con bandas de profundidad y pulso rojo de peligro
-    const ceilR = Math.floor(7 + dangerRatio * 28);
+    const ceilR = Math.floor(fadd(7.0, dRatio * 28.0));
     Draw.rect(0, 0, screenW, Math.max(1, halfH), Color.new(ceilR, 5, 10, 128));
-    Draw.rect(0, Math.max(0, halfH), screenW, screenH - Math.max(0, halfH), Color.new(16 + Math.floor(dangerRatio * 20), 13, 14, 128));
+    Draw.rect(0, Math.max(0, halfH), screenW, screenH - Math.max(0, halfH), Color.new(16 + Math.floor(dRatio * 20.0), 13, 14, 128));
 
     Draw.rect(0, Math.max(0, halfH - 42), screenW, 84, Color.new(4, 3, 6, 128));
     Draw.rect(0, Math.max(0, halfH - 18), screenW, 36, Color.new(2, 2, 4, 128));
 
-    const flashActive = player.flashlightOn && player.battery > 0.0;
-    const lowFlicker = (flashActive && player.battery < 24.0 && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.28 : 1.0;
-    const effFlash = flashActive ? (flashIntensity * lowFlicker) : 0.0;
-    const emerFlicker = ((frameTick % 97) < 6) ? 0.42 : 1.0;
+    const flashActive = player.flashlightOn && ((pbat - 0.0) > 0);
+    const lowFlicker = (flashActive && ((pbat - 24.0) < 0) && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.28 : 1.0;
+    const effFlash = toF64(flashActive ? (fInt * lowFlicker) : 0.0);
+    const emerFlicker = toF64(((frameTick % 97) < 6) ? 0.42 : 1.0);
 
-    const dirX = Math.cos(player.ang);
-    const dirY = Math.sin(player.ang);
-    const planeScale = Math.tan(fov * 0.5);
+    const dirX = toF64(Math.cos(pang));
+    const dirY = toF64(Math.sin(pang));
+    const planeScale = toF64(Math.tan(fovVal * 0.5));
     const planeX = -dirY * planeScale;
     const planeY =  dirX * planeScale;
 
-    renderStats.cols = 0; renderStats.minD = 99.0; renderStats.maxD = 0.0;
+    renderStats.cols = 0;
+    renderStats.minD = toF64(99.0);
+    renderStats.maxD = toF64(0.0);
 
     // 2. Raycasting DDA de 160 columnas
     for (let i = 0; i < NUM_RAYS; i++) {
-        const camX = (2.0 * (i + 0.5) / NUM_RAYS) - 1.0;
-        const rayDirX = dirX + planeX * camX;
-        const rayDirY = dirY + planeY * camX;
+        const camX = (2.0 * fadd(i, 0.5) / NUM_RAYS) - 1.0;
+        const rayDirX = fadd(dirX, planeX * camX);
+        const rayDirY = fadd(dirY, planeY * camX);
 
-        let mapX = Math.floor(player.x);
-        let mapY = Math.floor(player.y);
+        let mapX = Math.floor(px);
+        let mapY = Math.floor(py);
 
-        const deltaDistX = (Math.abs(rayDirX) < 1e-6) ? 1e6 : Math.abs(1.0 / rayDirX);
-        const deltaDistY = (Math.abs(rayDirY) < 1e-6) ? 1e6 : Math.abs(1.0 / rayDirY);
+        const absRayX = Math.abs(rayDirX);
+        const absRayY = Math.abs(rayDirY);
+        const deltaDistX = toF64(((absRayX - 1e-6) < 0) ? 1e6 : Math.abs(1.0 / rayDirX));
+        const deltaDistY = toF64(((absRayY - 1e-6) < 0) ? 1e6 : Math.abs(1.0 / rayDirY));
 
         let stepX = 0, stepY = 0;
-        let sideDistX = 0, sideDistY = 0;
+        let sideDistX = F64_ZERO, sideDistY = F64_ZERO;
 
         if (rayDirX < 0) {
             stepX = -1;
-            sideDistX = (player.x - mapX) * deltaDistX;
+            sideDistX = (px - mapX) * deltaDistX;
         } else {
             stepX = 1;
-            sideDistX = (mapX + 1.0 - player.x) * deltaDistX;
+            sideDistX = (fadd(mapX, 1.0) - px) * deltaDistX;
         }
 
         if (rayDirY < 0) {
             stepY = -1;
-            sideDistY = (player.y - mapY) * deltaDistY;
+            sideDistY = (py - mapY) * deltaDistY;
         } else {
             stepY = 1;
-            sideDistY = (mapY + 1.0 - player.y) * deltaDistY;
+            sideDistY = (fadd(mapY, 1.0) - py) * deltaDistY;
         }
 
         let hit = 0;
@@ -73,12 +88,12 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         let steps = 0;
         while (hit === 0 && steps < 64) {
             steps++;
-            if (sideDistX < sideDistY) {
-                sideDistX += deltaDistX;
+            if ((sideDistX - sideDistY) < 0) {
+                sideDistX = fadd(sideDistX, deltaDistX);
                 mapX += stepX;
                 side = 0;
             } else {
-                sideDistY += deltaDistY;
+                sideDistY = fadd(sideDistY, deltaDistY);
                 mapY += stepY;
                 side = 1;
             }
@@ -92,7 +107,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         }
 
         let perpDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
-        if (perpDist < 0.14) perpDist = 0.14;
+        if ((perpDist - 0.14) < 0) perpDist = toF64(0.14);
         zBuffer[i] = perpDist;
 
         const wallH = Math.floor(screenH / perpDist);
@@ -104,17 +119,17 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         if (clippedH <= 0) continue;
 
         const centerDist = Math.abs(camX);
-        const beam = effFlash > 0.0 ? Math.max(0.0, 1.0 - centerDist * 1.45) * effFlash : 0.0;
-        const maxVis = (effFlash > 0.0) ? (6.0 + beam * 6.0) : 3.3;
+        const beam = ((effFlash - 0.0) > 0) ? Math.max(0.0, 1.0 - centerDist * 1.45) * effFlash : 0.0;
+        const maxVis = ((effFlash - 0.0) > 0) ? fadd(6.0, beam * 6.0) : 3.3;
         let light = Math.max(0.16, 1.0 - (perpDist / maxVis));
         if (side === 1) light *= 0.72;
-        light = Math.min(1.0, light + beam * 0.28 * Math.max(0.0, 1.0 - perpDist / 10.5));
+        light = Math.min(1.0, fadd(light, beam * 0.28 * Math.max(0.0, 1.0 - perpDist / 10.5)));
 
-        let wallX = (side === 0) ? (player.y + perpDist * rayDirY) : (player.x + perpDist * rayDirX);
+        let wallX = (side === 0) ? fadd(py, perpDist * rayDirY) : fadd(px, perpDist * rayDirX);
         wallX -= Math.floor(wallX);
 
-        const isSeam = (wallX < 0.04 || wallX > 0.96);
-        const isPanel = (Math.floor(wallX * 8) % 2 === 0);
+        const isSeam = ((wallX - 0.04) < 0 || (wallX - 0.96) > 0);
+        const isPanel = (Math.floor(wallX * 8.0) % 2 === 0);
         if (isSeam) light *= 0.58;
         else if (isPanel) light *= 0.92;
 
@@ -128,18 +143,18 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             g = breakerActive ? 215 : 115;
             b = breakerActive ? 92 : 40;
         } else if (hit === 5) {
-            const bar = (Math.floor(wallX * 10) % 2 === 0);
+            const bar = (Math.floor(wallX * 10.0) % 2 === 0);
             r = bar ? 95 : 35;
             g = bar ? 105 : 40;
             b = bar ? 115 : 48;
         }
 
-        const cR = Math.min(255, Math.floor(r * light + dangerRatio * 24));
+        const cR = Math.min(255, Math.floor(fadd(r * light, dRatio * 24.0)));
         const cG = Math.min(255, Math.floor(g * light));
         const cB = Math.min(255, Math.floor(b * light));
         renderStats.cols++;
-        if (perpDist < renderStats.minD) renderStats.minD = perpDist;
-        if (perpDist > renderStats.maxD) renderStats.maxD = perpDist;
+        if ((perpDist - renderStats.minD) < 0) renderStats.minD = perpDist;
+        if ((perpDist - renderStats.maxD) > 0) renderStats.maxD = perpDist;
         if (renderStats.wallMode === 1) {
             Draw.rect(i * colW, drawStart, colW, clippedH, Color.new(255, 0, 255, 128));
         } else {
@@ -152,24 +167,26 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     for (let e = 0; e < entities.length; e++) {
         if (!entities[e].taken) drawList.push(entities[e]);
     }
-    drawList.push({ kind: "stalker", x: stalker.x, y: stalker.y });
+    drawList.push({ kind: "stalker", x: toF64(stalker.x), y: toF64(stalker.y) });
 
     for (let s = 0; s < drawList.length; s++) {
-        drawList[s].distSq = (drawList[s].x - player.x) ** 2 + (drawList[s].y - player.y) ** 2;
+        const dx = toF64(drawList[s].x) - px;
+        const dy = toF64(drawList[s].y) - py;
+        drawList[s].distSq = fadd(dx * dx, dy * dy);
     }
     drawList.sort((a, b) => b.distSq - a.distSq);
 
     const invDet = 1.0 / (planeX * dirY - dirX * planeY);
     for (let s = 0; s < drawList.length; s++) {
         const sp = drawList[s];
-        const sx = sp.x - player.x;
-        const sy = sp.y - player.y;
+        const sx = toF64(sp.x) - px;
+        const sy = toF64(sp.y) - py;
         const transformX = invDet * (dirY * sx - dirX * sy);
-        const transformY = invDet * (-planeY * sx + planeX * sy);
+        const transformY = invDet * fadd(-planeY * sx, planeX * sy);
 
-        if (transformY <= 0.22) continue;
+        if ((transformY - 0.22) <= 0) continue;
 
-        const screenX = Math.floor((screenW * 0.5) * (1.0 + transformX / transformY)) + swayOffset + panicShakeX;
+        const screenX = Math.floor((screenW * 0.5) * fadd(1.0, transformX / transformY)) + swayOffset + panicShakeX;
         const spH = Math.min(screenH * 2, Math.floor(screenH / transformY));
         const colIdx = Math.floor(screenX / colW);
 
@@ -185,7 +202,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             const cEnd = Math.min(NUM_RAYS - 1, Math.floor((mLeft + mW) / colW));
             let visible = false;
             for (let c = cStart; c <= cEnd; c++) {
-                if (transformY < zBuffer[c]) { visible = true; break; }
+                if ((transformY - zBuffer[c]) < 0) { visible = true; break; }
             }
             if (!visible) continue;
 
@@ -209,9 +226,9 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             if (e1x >= 0 && e1x + eyeSize <= screenW) Draw.rect(e1x, eyeY, eyeSize, eyeSize, Color.new(255, 20, 20, 128));
             if (e2x >= 0 && e2x + eyeSize <= screenW) Draw.rect(e2x, eyeY, eyeSize, eyeSize, Color.new(255, 20, 20, 128));
         } else {
-            if (colIdx < 0 || colIdx >= NUM_RAYS || transformY >= zBuffer[colIdx]) continue;
+            if (colIdx < 0 || colIdx >= NUM_RAYS || (transformY - zBuffer[colIdx]) >= 0) continue;
             const itemSize = Math.max(6, Math.floor(spH * 0.30));
-            const iy = Math.max(0, Math.min(screenH - itemSize, halfH + Math.floor(spH * 0.14) + Math.floor(Math.sin(frameTick * 0.1 + s) * 5)));
+            const iy = Math.max(0, Math.min(screenH - itemSize, halfH + Math.floor(spH * 0.14) + Math.floor(Math.sin(fadd(frameTick * 0.1, s)) * 5)));
             const ix = screenX - Math.floor(itemSize * 0.4);
 
             if (ix < 0 || ix + itemSize > screenW) continue;
@@ -234,15 +251,17 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
 
 // PDA Tactico animado (se desliza desde abajo y despliega al presionar SELECT o L2)
 export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities, dangerRatio, mapAnim, frameTick, fnt) {
-    if (mapAnim <= 0.01) return;
+    const mAnim = toF64(mapAnim);
+    const dRatio = toF64(dangerRatio);
+    if ((mAnim - 0.01) <= 0) return;
 
     // Ease-out cubic para una animacion suave al levantar el plano
-    const ease = 1.0 - Math.pow(1.0 - mapAnim, 3);
+    const ease = 1.0 - Math.pow(1.0 - mAnim, 3);
     const panelW = 360;
     const panelH = 290;
     const targetY = Math.floor((screenH - panelH) * 0.5);
     const ox = Math.floor((screenW - panelW) * 0.5);
-    const oy = Math.floor(screenH + (targetY - screenH) * ease);
+    const oy = Math.floor(fadd(screenH, (targetY - screenH) * ease));
 
     // Oscurecer fondo proporcionalmente
     Draw.rect(0, 0, screenW, screenH, Color.new(0, 0, 0, Math.floor(75 * ease)));
@@ -294,19 +313,20 @@ export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, en
                  : (e.kind === "battery") ? Color.new(60, 230, 255, 128)
                  : (e.kind === "breaker") ? Color.new(255, 75, 75, 128)
                  : Color.new(235, 235, 245, 128);
-        Draw.rect(mx0 + Math.floor(e.x * cellPx) - 2, my0 + Math.floor(e.y * cellPx) - 2, 5, 5, ec);
+        Draw.rect(mx0 + Math.floor(toF64(e.x) * cellPx) - 2, my0 + Math.floor(toF64(e.y) * cellPx) - 2, 5, 5, ec);
     }
 
     // Blip del Acechador (solo si hay proximidad / interferencia)
-    if (dangerRatio > 0.18 && (frameTick % 16 < 10)) {
-        Draw.rect(mx0 + Math.floor(stalker.x * cellPx) - 3, my0 + Math.floor(stalker.y * cellPx) - 3, 7, 7, Color.new(255, 35, 35, 128));
+    if ((dRatio - 0.18) > 0 && (frameTick % 16 < 10)) {
+        Draw.rect(mx0 + Math.floor(toF64(stalker.x) * cellPx) - 3, my0 + Math.floor(toF64(stalker.y) * cellPx) - 3, 7, 7, Color.new(255, 35, 35, 128));
     }
 
     // Jugador + cono de vista
-    const px = mx0 + Math.floor(player.x * cellPx);
-    const py = my0 + Math.floor(player.y * cellPx);
+    const px = mx0 + Math.floor(toF64(player.x) * cellPx);
+    const py = my0 + Math.floor(toF64(player.y) * cellPx);
+    const pang = toF64(player.ang);
     Draw.rect(px - 3, py - 3, 6, 6, Color.new(120, 255, 150, 128));
-    Draw.line(px, py, px + Math.floor(Math.cos(player.ang) * 14), py + Math.floor(Math.sin(player.ang) * 14), Color.new(150, 255, 180, 128));
+    Draw.line(px, py, px + Math.floor(Math.cos(pang) * 14), py + Math.floor(Math.sin(pang) * 14), Color.new(150, 255, 180, 128));
 
     // Marcadores cardinales N/S/O/E alrededor de la grilla
     fnt.scale = Math.fround(0.42);
@@ -325,7 +345,7 @@ export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, en
     fnt.color = Color.new(60, 230, 255, 128);  fnt.print(lx, my0 + 86, "BATERIAS");
     fnt.color = Color.new(235, 235, 245, 128); fnt.print(lx, my0 + 112,"NOTAS");
     fnt.color = Color.new(60, 235, 110, 128);  fnt.print(lx, my0 + 138,"SALIDA NORTE");
-    if (dangerRatio > 0.18) {
+    if ((dRatio - 0.18) > 0) {
         fnt.color = Color.new(255, 50, 50, 128);
         fnt.print(lx, my0 + 174, "! ANOMALIA !");
     }

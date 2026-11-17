@@ -6,6 +6,8 @@
 // 4 = Compuerta blindada de salida (Norte)
 // 5 = Reja de seguridad (se abre al activar el Disyuntor Central)
 
+import { toF64, fadd } from "./config.js";
+
 export const MAP_W = 20;
 export const MAP_H = 20;
 
@@ -51,15 +53,18 @@ export function isCellBlocked(grid, gx, gy) {
 
 export function isPosWalkable(grid, nx, ny, margin = 0.25) {
     if (isNaN(nx) || isNaN(ny)) return false;
+    const x = toF64(nx);
+    const y = toF64(ny);
+    const m = toF64(margin);
     const checks = [
-        [nx - margin, ny - margin],
-        [nx + margin, ny - margin],
-        [nx - margin, ny + margin],
-        [nx + margin, ny + margin],
-        [nx,          ny - margin],
-        [nx,          ny + margin],
-        [nx - margin, ny],
-        [nx + margin, ny]
+        [x - m,       y - m],
+        [fadd(x, m),  y - m],
+        [x - m,       fadd(y, m)],
+        [fadd(x, m),  fadd(y, m)],
+        [x,           y - m],
+        [x,           fadd(y, m)],
+        [x - m,       y],
+        [fadd(x, m),  y]
     ];
     for (let i = 0; i < 8; i++) {
         const mx = Math.floor(checks[i][0]);
