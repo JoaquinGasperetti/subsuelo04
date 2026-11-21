@@ -1,51 +1,59 @@
-# Subsuelo 04: El Acechador
+# Subsuelo 04: El Acechador (PS2 Real Hardware Edition)
 
-Juego de **Survival Horror 3D en primera persona** para PlayStation 2 (probado en **PCSX2**), desarrollado en **JavaScript** sobre el motor [AthenaEnv V4](https://github.com/DanielSant0s/AthenaEnv) y la plantilla [Athena-PS2-Template](https://github.com/JSLegendDev/Athena-PS2-Template).
+Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desarrollado en **JavaScript** sobre [AthenaEnv V4](https://github.com/DanielSant0s/AthenaEnv). Optimizado y preparado para ejecutarse tanto en una **PlayStation 2 real chipeada** (DVD-R, USB con OPL o wLaunchELF) como en **PCSX2**.
 
-## Características principales
+## Novedades y optimizaciones para PS2 real
 
-- **Motor Raycaster 3D de 320 columnas**: proyección plana exacta con *Z-buffer* para entidades, sombreado por distancia, cono de linterna dinámico, luces rojas de emergencia parpadeantes y balanceo de cámara.
-- **IA con Pathfinding BFS (`src/ai.js`)**: *El Acechador* patrulla el mapa de `20x20`, investiga el ruido al correr y te persigue rodeando columnas y paredes. Si lo enfocás de frente con la linterna, se frena; si la apagás y te quedás quieto, pierde tu rastro.
-- **Progresión y ambientación**:
-  - **Disyuntor central**: desbloquea las rejas de seguridad hacia los sectores Este y Oeste.
-  - **4 Fusibles** + **3 Baterías** + **4 Notas de registro** repartidas por las instalaciones.
-  - **HUD estilo cámara VHS (`REC`)**, interferencia dinámica por proximidad, minimapa táctico opcional, vibración **DualShock 2** al ritmo de los latidos y secuencia de *jumpscare*.
+- **Compatibilidad ISO9660 / CDVD real**:
+  - Corregido el nombre de `src/config.js` en minúsculas (evita fallos de carga en sistemas de archivos sensibles a mayúsculas/minúsculas en DVD/OPL).
+  - `SYSTEM.CNF` formateado estrictamente con saltos de línea DOS (`CRLF`) y salto final para compatibilidad con BIOS y modchips reales.
+- **Rendimiento en Emotion Engine (294 MHz) y GS**:
+  - **Calidad 3D seleccionable en tiempo real** desde Opciones (`ALTA 160` / `EQUILIBRADA 128` / `RAPIDA 96` rayos) con tablas precalculadas y cero asignaciones por frame.
+  - **Normalización por Delta-Time**: la velocidad del jugador, la IA y los temporizadores se mantienen idénticos en consolas **NTSC 60Hz**, **PAL 50Hz** o ante variaciones de FPS.
+  - **Garbage Collector controlado (`std.gc()`)** únicamente en transiciones de menú para evitar tirones durante persecuciones.
+  - **Contador de FPS nativo** (`Screen.setFrameCounter(true)`) activable desde Opciones.
+- **Televisores CRT y DualShock 2 reales**:
+  - **Área segura CRT (Overscan)** activada por defecto (configurable en Opciones entre `SEGURO CRT` y `COMPLETO HD`) para que el HUD, el ECG y los menús nunca se corten en un televisor de tubo.
+  - **Zona muerta analógica ampliada (`0.22`)** y sensibilidad configurable para evitar *drift* en sticks DualShock 2 desgastados, además de pausa automática si el mando se desconecta.
+- **Experiencia de juego completa**:
+  - **Menú Principal navegable** con fondo 3D en vivo y selector de dificultad (**NORMAL** / **PESADILLA**).
+  - **Menú de Opciones** accesible desde el título y desde la pausa.
+  - **Menú de Pausa completo**, visor de **Controles**, **Expediente de Registros**, lector modal de notas al encontrarlas, **brújula cardinal** en el HUD e **indicador direccional de peligro** en los bordes de pantalla.
+  - **Audio ambiental de terror (`assets/ambient.wav`)** en bucle continuo mediante `Sound.Stream` (`audsrv`).
+  - **Guardado en Memory Card (`mc0:/SUBSUELO04/save.json`)** de preferencias y récords de escape (con degradación segura si no hay Memory Card conectada).
 
 ## Controles (DualShock 2)
 
 | Botón / Stick | Acción |
 | :--- | :--- |
-| **Stick Izquierdo / D-Pad** | Caminar y desplazarse lateralmente |
+| **Stick Izquierdo / D-Pad** | Caminar y desplazarse lateralmente / navegar menús |
 | **Stick Derecho / L1 - R1** | Girar la cámara en primera persona |
 | **Círculo / Cuadrado** | Correr (consume *stamina* y genera ruido) |
-| **Triángulo** | Encender / Apagar linterna (ahorra batería y reduce detección) |
-| **Select** | Mostrar / Ocultar minimapa |
-| **Start** | Iniciar / Pausar partida |
+| **Triángulo** | Encender / apagar linterna táctica |
+| **Select / L2** | Desplegar / ocultar plano PDA |
+| **Start** | Pausar partida |
+| **R2** | Alternar información técnica de diagnóstico |
 
-## Estructura del proyecto
+## Cómo ejecutarlo en una PlayStation 2 real chipeada
 
-```text
-.
-├── main.js              # Bucle principal, estados, HUD VHS, notas y jumpscare
-├── src/
-│   ├── map.js           # Mapa 20x20, colisiones, rejas y textos de lore
-│   ├── ai.js            # Pathfinding BFS y máquina de 3 estados (Patrol/Investigate/Hunt)
-│   ├── renderer.js      # Raycaster 3D de 320 columnas, Z-buffer y minimapa
-│   ├── debugOverlay.js  # Utilidad de depuración de la plantilla
-│   └── timer.js         # Temporizador auxiliar
-├── assets/              # Recursos gráficos y fuentes
-├── athena.elf           # Binario ejecutable de AthenaEnv para PS2
-├── ATHA_000.01          # Ejecutable de arranque para ISO PS2
-├── SYSTEM.CNF           # Descriptor de arranque PlayStation 2
-└── athena.ini           # Configuración del runtime
-```
+### Opción 1: Grabar en DVD-R (Modchip Matrix / Modbo / Mars)
+1. Abrí **ImgBurn** en PC y elegí **Create image file from files/folders** (Crear archivo de imagen desde archivos/carpetas).
+2. Agregá **todo el contenido** de la carpeta raíz (`SYSTEM.CNF`, `ATHA_000.01`, `athena.ini`, `main.js`, `src/`, `assets/`).
+3. En la pestaña **Options**:
+   - **File System**: `ISO9660 + UDF`
+   - **UDF Revision**: `1.02`
+4. En **Labels**, poné por ejemplo `SUBSUELO04` y generá el archivo `.iso`.
+5. Grabá la `.iso` en un **DVD-R** (preferentemente Verbatim) a velocidad baja (**4x**).
+
+### Opción 2: Desde pendrive USB con wLaunchELF (sin quemar disco)
+1. Formateá un pendrive en **FAT32**.
+2. Copiá la carpeta completa `subsuelo04` a la raíz del pendrive (`mass:/subsuelo04/`).
+3. En la PS2, abrí **wLaunchELF** / **uLaunchELF**, entrá en `mass:/subsuelo04/` y ejecutá `athena.elf`.
+
+### Opción 3: Desde USB / HDD con OPL (Open PS2 Loader)
+1. Generá la `.iso` con ImgBurn como en la Opción 1 (ISO9660 + UDF 1.02).
+2. Copiá la `.iso` a la carpeta `DVD/` de tu USB o disco interno con el formato de nombre `ATHA_000.01.Subsuelo04.iso` (o instalala con OPL Manager).
 
 ## Cómo ejecutarlo en PCSX2
-
-1. **Modo ISO (recomendado)**: comprimí todos los archivos de la raíz en un `.zip` (o usá el paquete tal cual), convertilo a `.iso` en [mconverter.eu](https://mconverter.eu) y abrilo en PCSX2 con **Sistema -> Iniciar disco**.
-2. **Modo ELF directo**: en PCSX2 seleccioná **Sin disco (No Disc)**, activá **HostFS** en ajustes avanzados del sistema y cargá `athena.elf` desde **Sistema -> Iniciar archivo...**.
-
-## Próximos pasos planificados
-
-- Reemplazo de columnas sólidas por texturas `.png` con recorte vertical (`Image.startx` / `endx`).
-- Sonido ambiental, pasos, latidos y efectos de *jumpscare* mediante `Sound` / `Sfx`.
+- **Modo ISO**: cargá la `.iso` generada desde **Sistema -> Iniciar disco**.
+- **Modo ELF directo**: activá **HostFS** en ajustes avanzados y cargá `athena.elf` desde **Sistema -> Iniciar archivo...**.

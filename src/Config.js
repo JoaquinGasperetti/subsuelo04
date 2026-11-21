@@ -1,18 +1,40 @@
-// Configuración gráfica, efectos de cámara, overlays y vibración DualShock 2
-export const ENABLE_BOB       = true; // balanceo/vaivén de cámara y linterna en mano al caminar
-export const ENABLE_OVERLAYS  = true; // viñeta Gouraud, partículas, scanlines VHS y distorsión de peligro
-export const ENABLE_RUMBLE    = true; // vibración del DualShock 2
-export const ENABLE_VIEWMODEL = true; // mano y linterna táctica 3D en primera persona
-export const ENABLE_PARTICLES = true; // partículas atmosféricas (polvo/esporas iluminadas por el haz)
+// ============================================================================
+// Configuración global, ajustes dinámicos y utilidades FLOAT64 para PS2 EE
+// ============================================================================
 
-// En el fork de QuickJS de AthenaEnv V4 (src/quickjs/quickjs.c):
-// 1) Sumar INT + FLOAT64 con "+" o "+=" entra en js_add_slow y convierte el resultado en
-//    JS_CUSTOM_TAG_FLOAT32 (tag 7), mientras que el otro eje permanece en JS_TAG_FLOAT64 (tag 8).
-// 2) En js_relational_slow (<, <=, >, >=), cuando un operando es FLOAT32 y el otro es FLOAT64,
-//    ambos filtros rápidos fallan y cae en float64_compare, donde lee el FLOAT32 mediante
-//    JS_VALUE_GET_INT (~1.06e9). Así, `sideDistX < sideDistY` evalúa siempre a `false` en el DDA
-//    y todas las paredes verticales (side = 0) desaparecen al mover al jugador.
-// Estas utilidades fuerzan OP_neg + OP_sub (__JS_NewFloat64), evitando que se creen valores FLOAT32.
+// Ajustes modificables desde el menú de Opciones (y persistibles en Memory Card)
+export const GAME_SETTINGS = {
+    // Calidad del raycaster: 0 = ALTA (160 rayos), 1 = EQUILIBRADA (128 rayos, ideal PS2 real), 2 = RENDIMIENTO (96 rayos)
+    qualityIndex: 1,
+    // Margen de seguridad para televisores CRT con overscan (true = seguro CRT, false = pantalla completa HD/emulador)
+    crtSafe: true,
+    // Sensibilidad de cámara: 0 = BAJA, 1 = MEDIA, 2 = ALTA
+    sensitivityIndex: 1,
+    // Vibración DualShock 2
+    rumble: true,
+    // Efectos visuales VHS, viñeta y partículas
+    overlays: true,
+    // Balanceo de cámara y linterna en mano
+    bob: true,
+    viewmodel: true,
+    particles: true,
+    // Audio ambiental en 0% por defecto para arranque 100% seguro en PS2 real USB (activar desde Opciones)
+    audioVolume: 0,
+    // Mostrar contador de FPS en esquina superior
+    showFps: false,
+    // Dificultad: 0 = NORMAL, 1 = PESADILLA
+    difficulty: 0
+};
+
+export const QUALITY_RAYS = [160, 128, 96];
+export const QUALITY_LABELS = ["ALTA (160)", "EQUILIBRADA (128)", "RAPIDA (96)"];
+export const SENS_TURN_SPEED = [0.038, 0.052, 0.068];
+export const SENS_LABELS = ["BAJA", "MEDIA", "ALTA"];
+export const DIFF_LABELS = ["NORMAL", "PESADILLA"];
+
+// Zona muerta ampliada para sticks analógicos DualShock 2 reales con desgaste
+export const STICK_DEADZONE = 0.22;
+
 export const F64_ZERO = -0.0;
 
 export function toF64(v) {
@@ -21,4 +43,27 @@ export function toF64(v) {
 
 export function fadd(a, b) {
     return a - (-b);
+}
+
+export function clampF64(v, lo, hi) {
+    const x = toF64(v);
+    const mn = toF64(lo);
+    const mx = toF64(hi);
+    if ((x - mn) < 0) return mn;
+    if ((x - mx) > 0) return mx;
+    return x;
+}
+
+// Empaquetado directo RGBA en entero de 32 bits (JS_TAG_INT), sin llamadas C a Color.new()
+export function rgba(r, g, b, a) {
+    return (r & 255) | ((g & 255) << 8) | ((b & 255) << 16) | ((a & 255) << 24);
+}
+
+// Dispara el recolector de ciclos de QuickJS SOLO en transiciones de menú (nunca durante gameplay)
+export function requestGC() {
+    try {
+        if (typeof std !== "undefined" && std && typeof std.gc === "function") {
+            std.gc();
+        }
+    } catch (_) {}
 }

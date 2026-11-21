@@ -1,30 +1,48 @@
 // ============================================================================
-// Renderizador 3D Ultra-Optimizado para PCSX2 / Emotion Engine (60 FPS)
-// - 160 rayos con agrupamiento de tramos (Span Batching) para detalles de pared
-// - Colores empaquetados por bits (JS_TAG_INT) sin llamadas a Color.new en bucles
-// - Tablas precalculadas CAM_X y BEAM_PROF (0 allocaciones por frame)
-// - Sombreado Gouraud en piso/techo/linterna, rejas 3D transparentes y viewmodel
+// Renderizador 3D Ultra-Optimizado para PS2 Real (Emotion Engine 294MHz + GS)
+// - Calidad dinámica sin allocaciones: 160 (Alta), 128 (Equilibrada), 96 (Rápida)
+// - Agrupamiento de tramos (Span Batching) para detalles arquitectónicos en perspectiva
+// - Colores empaquetados por bits (JS_TAG_INT) sin llamadas C a Color.new() en bucles
+// - Sombreado Gouraud, rejas 3D transparentes, viewmodel, PDA y alerta direccional
 // ============================================================================
 import { MAP_W, MAP_H } from "./map.js";
-import { ENABLE_BOB, ENABLE_OVERLAYS, ENABLE_VIEWMODEL, ENABLE_PARTICLES, F64_ZERO, toF64 } from "./config.js";
+import { GAME_SETTINGS, QUALITY_RAYS, F64_ZERO, toF64, rgba } from "./config.js";
 
-export const NUM_RAYS = 160;
-const zBuffer = new Float64Array(NUM_RAYS);
+const MAX_RAYS = 160;
+const zBuffer = new Float64Array(MAX_RAYS);
 
-// Tablas precalculadas al iniciar para ahorrar CPU en el bucle de 160 columnas
-const CAM_X     = new Float64Array(NUM_RAYS);
-const BEAM_PROF = new Float64Array(NUM_RAYS);
-for (let i = 0; i < NUM_RAYS; i++) {
-    const cx = (2.0 * (i - (-0.5)) / NUM_RAYS) - 1.0;
-    CAM_X[i] = cx;
-    const absCx = cx < 0 ? -cx : cx;
-    const bp = 1.0 - absCx * 1.38;
-    BEAM_PROF[i] = (bp > 0) ? (bp * bp) : 0.0;
+// Tablas precalculadas para los 3 niveles de calidad (0 allocaciones por frame)
+const QUALITY_TABLES = [];
+for (let q = 0; q < QUALITY_RAYS.length; q++) {
+    const n = QUALITY_RAYS[q];
+    const camX = new Float64Array(n);
+    const beamProf = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        const cx = (2.0 * (i - (-0.5)) / n) - 1.0;
+        camX[i] = cx;
+        const absCx = cx < 0 ? -cx : cx;
+        const bp = 1.0 - absCx * 1.38;
+        beamProf[i] = (bp > 0) ? (bp * bp) : 0.0;
+    }
+    QUALITY_TABLES.push({ numRays: n, camX, beamProf });
 }
 
-// Empaquetado directo RGBA en entero de 32 bits (JS_TAG_INT), evitando llamadas C a Color.new()
-function rgba(r, g, b, a) {
-    return (r & 255) | ((g & 255) << 8) | ((b & 255) << 16) | ((a & 255) << 24);
+// Caché de coordenadas horizontales exactas por (screenW, numRays) para evitar huecos en cualquier resolución
+let cachedColScreenW = -1;
+let cachedColNumRays = -1;
+const colStartX = new Int16Array(MAX_RAYS);
+const colWidth  = new Int16Array(MAX_RAYS);
+
+function ensureColLayout(screenW, numRays) {
+    if (cachedColScreenW === screenW && cachedColNumRays === numRays) return;
+    cachedColScreenW = screenW;
+    cachedColNumRays = numRays;
+    for (let i = 0; i < numRays; i++) {
+        const x0 = ((i * screenW) / numRays) | 0;
+        const x1 = (((i + 1) * screenW) / numRays) | 0;
+        colStartX[i] = x0;
+        colWidth[i]  = x1 - x0;
+    }
 }
 
 // Colores estáticos precomputados
@@ -76,6 +94,7 @@ const COL_LED_OFF     = rgba(180, 35, 35, 128);
 const COL_LED_LOW     = rgba(255, 165, 30, 128);
 const COL_LED_OK      = rgba(55, 245, 115, 128);
 const COL_MAGENTA     = rgba(255, 0, 255, 128);
+const COL_EDGE_CLEAR  = rgba(210, 15, 15, 0);
 
 // Pool estático para ordenar entidades sin crear objetos ni closures por frame
 const MAX_DRAW_ENTITIES = 16;
@@ -84,9 +103,21 @@ for (let i = 0; i < MAX_DRAW_ENTITIES; i++) {
     drawPool.push({ kind: "", x: 0.0, y: 0.0, distSq: 0.0 });
 }
 
-export const renderStats = { cols: 0, minD: 99.0, maxD: 0.0, wallMode: 0 };
+export const renderStats = { cols: 0, minD: 99.0, maxD: 0.0, wallMode: 0, numRays: 128 };
 
-export function render3DWorld(screenW, screenH, grid, player, stalker, entities, dangerRatio, frameTick, breakerActive, fov, flashIntensity, mapAnim = 0.0) {
+export function render3DWorld(
+    screenW, screenH, grid, player, stalker, entities,
+    dangerRatio, frameTick, exitUnlocked, fov, flashIntensity,
+    mapAnim = 0.0, sideBias = 0.0
+) {
+    const qIdx = GAME_SETTINGS.qualityIndex;
+    const qTable = QUALITY_TABLES[qIdx] || QUALITY_TABLES[1];
+    const numRays = qTable.numRays;
+    const CAM_X = qTable.camX;
+    const BEAM_PROF = qTable.beamProf;
+    ensureColLayout(screenW, numRays);
+    renderStats.numRays = numRays;
+
     const px = toF64(player.x);
     const py = toF64(player.y);
     const pang = toF64(player.ang);
@@ -96,12 +127,17 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     const fovVal = toF64(fov);
     const fInt = toF64(flashIntensity);
     const mAnim = toF64(mapAnim);
+    const sBias = toF64(sideBias);
 
-    const colW = (screenW / NUM_RAYS) | 0; // 4px en 640x448
-    const bobOffset = ENABLE_BOB ? ((Math.sin(pbob) * 7.0) | 0) : 0;
-    const swayOffset = ENABLE_BOB ? ((Math.cos(pbob * 0.5) * 4.0) | 0) : 0;
-    const panicShakeY = (ENABLE_BOB && (dRatio - 0.30) > 0) ? (((Math.random() - 0.5) * 7.0 * dRatio) | 0) : 0;
-    const panicShakeX = (ENABLE_BOB && (dRatio - 0.45) > 0) ? (((Math.random() - 0.5) * 4.0 * dRatio) | 0) : 0;
+    const enableBob = GAME_SETTINGS.bob;
+    const enableOverlays = GAME_SETTINGS.overlays;
+    const enableViewmodel = GAME_SETTINGS.viewmodel;
+    const enableParticles = GAME_SETTINGS.particles && enableOverlays;
+
+    const bobOffset = enableBob ? ((Math.sin(pbob) * 7.0) | 0) : 0;
+    const swayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 4.0) | 0) : 0;
+    const panicShakeY = (enableBob && (dRatio - 0.30) > 0) ? (((Math.random() - 0.5) * 7.0 * dRatio) | 0) : 0;
+    const panicShakeX = (enableBob && (dRatio - 0.45) > 0) ? (((Math.random() - 0.5) * 4.0 * dRatio) | 0) : 0;
     let halfH = ((screenH >> 1) + bobOffset + panicShakeY) | 0;
     if (halfH < 40) halfH = 40;
     else if (halfH > screenH - 40) halfH = screenH - 40;
@@ -115,7 +151,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     // ------------------------------------------------------------------------
     // 1. TECHO Y PISO GOURAUD POR HARDWARE + CONO VOLUMETRICO DE LINTERNA
     // ------------------------------------------------------------------------
-    const redPulse = (dRatio * 34.0) | 0;
+    const redPulse = (dRatio * 36.0) | 0;
     const ceilTopCol = rgba(14 + redPulse, 16, 22, 128);
     const ceilMidCol = rgba(7 + (redPulse >> 1), 8, 12, 128);
     const floorMidCol = rgba(12 + (redPulse >> 1), 14, 18, 128);
@@ -162,8 +198,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     renderStats.minD = toF64(99.0);
     renderStats.maxD = toF64(0.0);
 
-    // Variables de Span Batching por celda de muro para dibujar cornisa, zocalo y detalles
-    // una sola vez por tramo de pared en vez de repetirlos en cada una de las 160 columnas.
+    // Variables de Span Batching por celda de muro
     let spanKey = -1;
     let spanHit = 0;
     let spanX0 = 0;
@@ -173,9 +208,9 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     let spanCR = 0, spanCG = 0, spanCB = 0;
 
     // ------------------------------------------------------------------------
-    // 2. RAYCASTING DDA DE 160 COLUMNAS + AGRUPAMIENTO POR TRAMOS (SPAN BATCH)
+    // 2. RAYCASTING DDA + AGRUPAMIENTO POR TRAMOS (SPAN BATCH)
     // ------------------------------------------------------------------------
-    for (let i = 0; i < NUM_RAYS; i++) {
+    for (let i = 0; i < numRays; i++) {
         const camX = CAM_X[i];
         const rayDirX = dirX - (-planeX * camX);
         const rayDirY = dirY - (-planeY * camX);
@@ -247,7 +282,8 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         if ((perpDist - 0.14) < 0) perpDist = toF64(0.14);
         zBuffer[i] = perpDist;
 
-        const screenX = i * colW;
+        const screenX = colStartX[i];
+        const colW = colWidth[i];
         const wallH = (screenH / perpDist) | 0;
         const rawStart = halfH - (wallH >> 1);
         const rawEnd = rawStart + wallH;
@@ -260,7 +296,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
 
         if (clippedH > 0) {
             let light = 1.0 - (perpDist / maxVis);
-            if ((light - 0.12) < 0) light = 0.12;
+            if ((light - 0.10) < 0) light = 0.10;
             if (side === 1) light *= 0.74;
             const distFactor = 1.0 - perpDist * 0.087;
             if ((distFactor - 0.0) > 0) {
@@ -284,9 +320,9 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
                 g = 26;
                 b = 28;
             } else if (hit === 4) {
-                r = breakerActive ? 42 : 148;
-                g = breakerActive ? 210 : 108;
-                b = breakerActive ? 95 : 38;
+                r = exitUnlocked ? 42 : 148;
+                g = exitUnlocked ? 210 : 108;
+                b = exitUnlocked ? 95 : 38;
             }
 
             let cR = ((r * light) - (-dRatio * 26.0)) | 0;
@@ -303,11 +339,9 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             if (renderStats.wallMode === 1) {
                 Draw.rect(screenX, drawStart, colW, clippedH, COL_MAGENTA);
             } else {
-                // 1 solo Draw.rect por columna para la pared base
                 Draw.rect(screenX, drawStart, colW, clippedH, cR | (cG << 8) | (cB << 16) | ALPHA_OPAQUE);
             }
 
-            // Agrupamiento de detalles arquitectónicos por celda (Span Batching)
             const cellKey = (mapY << 7) | (mapX << 1) | side;
             if (cellKey === spanKey) {
                 spanX1 = screenX + colW;
@@ -316,7 +350,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
                 spanH1 = wallH;
             } else {
                 if (spanKey !== -1 && renderStats.wallMode === 0) {
-                    flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, breakerActive, emerFlicker);
+                    flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, exitUnlocked, emerFlicker);
                 }
                 spanKey = cellKey;
                 spanHit = hit;
@@ -335,7 +369,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         }
 
         // --------------------------------------------------------------------
-        // 2B. REJAS DE SEGURIDAD 3D TRANSPARENTES (SOLO EN COLUMNAS CON REJA)
+        // 2B. REJAS DE SEGURIDAD 3D TRANSPARENTES
         // --------------------------------------------------------------------
         if (hasGate) {
             const gWallH = (screenH / gateDist) | 0;
@@ -386,7 +420,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     }
 
     if (spanKey !== -1 && renderStats.wallMode === 0) {
-        flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, breakerActive, emerFlicker);
+        flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, exitUnlocked, emerFlicker);
     }
 
     // ------------------------------------------------------------------------
@@ -415,7 +449,6 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         slot.distSq = (dx * dx) - (-(dy * dy));
     }
 
-    // Ordenamiento por insercion in-place (de mas lejano a mas cercano)
     for (let i = 1; i < drawCount; i++) {
         const tmp = drawPool[i];
         const tmpDist = tmp.distSq;
@@ -428,6 +461,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     }
 
     const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+    const raysPerPx = numRays / screenW;
     for (let s = 0; s < drawCount; s++) {
         const sp = drawPool[s];
         const sx = sp.x - px;
@@ -440,7 +474,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
         const screenX = (((screenW * 0.5) * (1.0 - (-transformX / transformY))) | 0) + swayOffset + panicShakeX;
         let spH = (screenH / transformY) | 0;
         if (spH > (screenH << 1)) spH = screenH << 1;
-        const colIdx = (screenX / colW) | 0;
+        const colIdx = (screenX * raysPerPx) | 0;
 
         if (sp.kind === "stalker") {
             const mW = Math.max(14, (spH * 0.48) | 0);
@@ -453,8 +487,8 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             const drawH = Math.min(screenH - mTop, mH);
             if (drawH <= 0) continue;
 
-            const cStart = Math.max(0, (mLeft / colW) | 0);
-            const cEnd = Math.min(NUM_RAYS - 1, ((mLeft + mW) / colW) | 0);
+            const cStart = Math.max(0, (mLeft * raysPerPx) | 0);
+            const cEnd = Math.min(numRays - 1, ((mLeft + mW) * raysPerPx) | 0);
             let visible = false;
             for (let c = cStart; c <= cEnd; c++) {
                 if ((transformY - zBuffer[c]) < 0) { visible = true; break; }
@@ -469,13 +503,11 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
             const bodyX = Math.max(0, mLeft);
             const bodyW = Math.min(screenW, mLeft + mW) - bodyX;
 
-            // Sombra en el piso
             const shadowY = Math.min(screenH - 4, mTop + drawH - 2);
             if (bodyW > 4 && shadowY > halfH) {
                 Draw.rect(bodyX - 2, shadowY, bodyW + 4, Math.max(3, (drawH * 0.05) | 0), COL_SHADOW);
             }
 
-            // Piernas articuladas
             const legW = Math.max(3, (mW * 0.22) | 0);
             const legH = (drawH * 0.34) | 0;
             const legY = mTop + ((drawH * 0.66) | 0);
@@ -490,7 +522,6 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
                 Draw.rect(rLegX, Math.max(0, Math.min(screenH - legH, legY - legOffsetL)), legW, legH, darkLimbCol);
             }
 
-            // Torso Gouraud + costillas
             if (bodyW > 0) {
                 const torsoTop = mTop + ((drawH * 0.22) | 0);
                 const torsoH = (drawH * 0.48) | 0;
@@ -508,7 +539,6 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
                 Draw.rect(ribX, torsoTop + ((torsoH * 0.56) | 0), ribW, ribH, ribCol);
             }
 
-            // Brazos y garras
             const armW = Math.max(3, (mW * 0.16) | 0);
             const armH = (drawH * 0.52) | 0;
             const armTop = mTop + ((drawH * 0.24) | 0);
@@ -527,7 +557,6 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
                 Draw.rect(rightArmX - 2, Math.min(screenH - 3, ay + armH - 3), armW + 2, 3, clawCol);
             }
 
-            // Cabeza / craneo Gouraud + mandibula + ojos carmesi
             const headW = (mW * 0.56) | 0;
             const headH = (drawH * 0.24) | 0;
             const headL = screenX - (headW >> 1);
@@ -561,7 +590,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
                 Draw.rect(e2x + 1, eyeY + 1, Math.max(1, eyeSize - 2), Math.max(1, eyeSize - 2), COL_EYE_CORE);
             }
         } else {
-            if (colIdx < 0 || colIdx >= NUM_RAYS || (transformY - zBuffer[colIdx]) >= 0) continue;
+            if (colIdx < 0 || colIdx >= numRays || (transformY - zBuffer[colIdx]) >= 0) continue;
             const itemSize = Math.max(8, (spH * 0.32) | 0);
             const floatBob = (Math.sin((frameTick * 0.10) - (-s)) * 5.0) | 0;
             const iy = Math.max(4, Math.min(screenH - itemSize - 4, halfH + ((spH * 0.14) | 0) + floatBob));
@@ -609,7 +638,7 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     // ------------------------------------------------------------------------
     // 4. PARTICULAS ATMOSFERICAS LIGERAS (10 PARTICULAS EN EL HAZ)
     // ------------------------------------------------------------------------
-    if (ENABLE_PARTICLES && (effFlash - 0.05) > 0) {
+    if (enableParticles && (effFlash - 0.05) > 0) {
         const partCol = rgba(210, 225, 240, ((effFlash * 55.0) | 0));
         for (let p = 0; p < 10; p++) {
             const pxSeed = (p * 61 + 19) & 63;
@@ -623,23 +652,37 @@ export function render3DWorld(screenW, screenH, grid, player, stalker, entities,
     // ------------------------------------------------------------------------
     // 5. VIEWMODEL 3D EN PRIMERA PERSONA (MANO + LINTERNA TACTICA)
     // ------------------------------------------------------------------------
-    if (ENABLE_VIEWMODEL) {
+    if (enableViewmodel) {
         renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, bobOffset, swayOffset, mAnim, frameTick);
     }
 
     // ------------------------------------------------------------------------
-    // 6. VINETA PERIMETRAL GOURAUD (2 QUADS, 0 BUCLES DE SCANLINES)
+    // 6. VINETA PERIMETRAL GOURAUD + INDICADOR DIRECCIONAL DE PELIGRO
     // ------------------------------------------------------------------------
-    if (ENABLE_OVERLAYS) {
-        const vigH = 52;
-        Draw.quad(0, 34, screenW, 34, 0, 34 + vigH, screenW, 34 + vigH, COL_VIG_DARK, COL_VIG_DARK, COL_VIG_CLEAR, COL_VIG_CLEAR);
-        Draw.quad(0, screenH - 36 - vigH, screenW, screenH - 36 - vigH, 0, screenH - 36, screenW, screenH - 36, COL_VIG_CLEAR, COL_VIG_CLEAR, COL_VIG_DARK, COL_VIG_DARK);
+    if (enableOverlays) {
+        const vigH = 48;
+        Draw.quad(0, 0, screenW, 0, 0, vigH, screenW, vigH, COL_VIG_DARK, COL_VIG_DARK, COL_VIG_CLEAR, COL_VIG_CLEAR);
+        Draw.quad(0, screenH - vigH, screenW, screenH - vigH, 0, screenH, screenW, screenH, COL_VIG_CLEAR, COL_VIG_CLEAR, COL_VIG_DARK, COL_VIG_DARK);
+
+        // Resplandor rojo lateral que indica hacia qué lado está El Acechador cuando está cerca
+        if ((dRatio - 0.22) > 0) {
+            const absBias = sBias < 0 ? -sBias : sBias;
+            if ((absBias - 0.18) > 0) {
+                let edgeAlpha = (dRatio * absBias * 84.0) | 0;
+                if (edgeAlpha > 88) edgeAlpha = 88;
+                const edgeCol = rgba(220, 18, 22, edgeAlpha);
+                const edgeW = 46;
+                if (sBias < 0) {
+                    Draw.quad(0, 0, edgeW, 0, 0, screenH, edgeW, screenH, edgeCol, COL_EDGE_CLEAR, edgeCol, COL_EDGE_CLEAR);
+                } else {
+                    Draw.quad(screenW - edgeW, 0, screenW, 0, screenW - edgeW, screenH, screenW, screenH, COL_EDGE_CLEAR, edgeCol, COL_EDGE_CLEAR, edgeCol);
+                }
+            }
+        }
     }
 }
 
-// Dibuja cornisa, zócalo y detalle de material una sola vez por celda de muro visible
-// siguiendo exactamente la perspectiva trapezoidal (spanTop0..spanTop1 y spanBot0..spanBot1).
-function flushWallSpanDetails(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, h1, cR, cG, cB, breakerActive, emerFlicker) {
+function flushWallSpanDetails(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, h1, cR, cG, cB, exitUnlocked, emerFlicker) {
     if (h0 < 16 && h1 < 16) return;
 
     const cornH0 = Math.max(2, (h0 * 0.08) | 0);
@@ -648,10 +691,8 @@ function flushWallSpanDetails(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, 
     const cTopEnd1 = Math.min(bot1, top1 + cornH1);
     const trimCol = rgba((cR * 0.34) | 0, (cG * 0.36) | 0, (cB * 0.40) | 0, 128);
 
-    // Cornisa superior con perspectiva
     Draw.quad(x0, top0, x1, top1, x0, cTopEnd0, x1, cTopEnd1, trimCol, trimCol, trimCol, trimCol);
 
-    // Zócalo industrial inferior con perspectiva
     const baseStart0 = Math.max(top0, bot0 - cornH0);
     const baseStart1 = Math.max(top1, bot1 - cornH1);
     const baseCol = rgba((cR * 0.26) | 0, (cG * 0.28) | 0, (cB * 0.32) | 0, 128);
@@ -667,19 +708,16 @@ function flushWallSpanDetails(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, 
     if (avgH < 20) return;
 
     if (hit === 1) {
-        // Franja horizontal de conducto / junta estructural en perspectiva
         const j0 = top0 + ((bot0 - top0) >> 1);
         const j1 = top1 + ((bot1 - top1) >> 1);
         const jCol = rgba((cR * 0.55) | 0, (cG * 0.58) | 0, (cB * 0.62) | 0, 128);
         Draw.quad(x0, j0, x1, j1, x0, Math.min(bot0, j0 + 2), x1, Math.min(bot1, j1 + 2), jCol, jCol, jCol, jCol);
     } else if (hit === 2) {
-        // Refuerzo metálico transversal con remaches en pilares oxidados
         const p0 = top0 + ((bot0 - top0) >> 1) - 2;
         const p1 = top1 + ((bot1 - top1) >> 1) - 2;
         const pCol = rgba(Math.min(255, cR + 32), Math.min(255, cG + 28), Math.min(255, cB + 24), 128);
         Draw.quad(x0, p0, x1, p1, x0, Math.min(bot0, p0 + 4), x1, Math.min(bot1, p1 + 4), pCol, pCol, pCol, pCol);
     } else if (hit === 3) {
-        // Luminaria roja de emergencia empotrada en el centro del tramo
         const lw = Math.max(4, (spanW * 0.32) | 0);
         const lx = midX - (lw >> 1);
         const ly = avgTop + ((avgH * 0.24) | 0);
@@ -691,25 +729,24 @@ function flushWallSpanDetails(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, 
             Draw.rect(lx, ly, lw, lh, rgba(glowR, glowG, 35, 128));
         }
     } else if (hit === 4) {
-        // Panel luminoso de estado en la Compuerta Blindada Norte
         const pw = Math.max(6, (spanW * 0.36) | 0);
         const px0 = midX - (pw >> 1);
         const py0 = avgTop + ((avgH * 0.42) | 0);
         const ph = Math.max(4, (avgH * 0.16) | 0);
         if (py0 + ph < avgBot) {
             Draw.rect(px0 - 2, py0 - 2, pw + 4, ph + 4, COL_CHEV_DARK);
-            Draw.rect(px0, py0, pw, ph, breakerActive ? COL_DOOR_OPEN : COL_DOOR_LOCK);
+            Draw.rect(px0, py0, pw, ph, exitUnlocked ? COL_DOOR_OPEN : COL_DOOR_LOCK);
         }
     }
 }
 
 function renderFlashlightViewmodel(screenW, screenH, effFlash, battery, bobOffset, swayOffset, mapAnim, frameTick) {
     const hideOffset = (mapAnim * 120.0) | 0;
-    const vmX = screenW - 148 + ((swayOffset * 1.6) | 0);
+    const safeX = GAME_SETTINGS.crtSafe ? 16 : 0;
+    const vmX = screenW - 148 - safeX + ((swayOffset * 1.6) | 0);
     const vmY = screenH - 118 + ((bobOffset * 1.15) | 0) + hideOffset;
     if (vmY >= screenH + 20) return;
 
-    // 1) Haz volumétrico Gouraud saliendo del lente (sin Draw.circle costoso)
     if ((effFlash - 0.05) > 0) {
         const lensX = vmX + 12;
         const lensY = vmY + 8;
@@ -726,7 +763,6 @@ function renderFlashlightViewmodel(screenW, screenH, effFlash, battery, bobOffse
         Draw.rect(lensX - 10, lensY - 10, 20, 20, rgba(210, 235, 255, coneAlpha));
     }
 
-    // 2) Manga y guante táctico
     Draw.quad(
         vmX + 48, vmY + 54,
         vmX + 132, vmY + 42,
@@ -737,7 +773,6 @@ function renderFlashlightViewmodel(screenW, screenH, effFlash, battery, bobOffse
     Draw.rect(vmX + 34, vmY + 36, 44, 26, COL_GLOVE);
     Draw.rect(vmX + 38, vmY + 32, 36, 6, COL_GLOVE_HI);
 
-    // 3) Cuerpo cilíndrico metálico y cabezal con sombreado Gouraud
     Draw.quad(
         vmX + 18, vmY + 12,
         vmX + 44, vmY - 4,
@@ -753,7 +788,6 @@ function renderFlashlightViewmodel(screenW, screenH, effFlash, battery, bobOffse
         COL_FL_HEAD_B, COL_FL_HEAD_T, COL_FL_HEAD_B, COL_FL_HEAD_T
     );
 
-    // Lente frontal y LED de batería (usando Draw.rect en vez de Draw.circle)
     Draw.rect(vmX + 6, vmY - 2, 12, 12, ((effFlash - 0.05) > 0) ? COL_LENS_ON : COL_LENS_OFF);
     const lowBat = (battery - 25.0) < 0;
     const ledCol = ((effFlash - 0.05) <= 0)
@@ -772,7 +806,7 @@ export function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, en
 
     const inv = 1.0 - mAnim;
     const ease = 1.0 - (inv * inv * inv);
-    const panelW = 360;
+    const panelW = 368;
     const panelH = 290;
     const targetY = (screenH - panelH) >> 1;
     const ox = (screenW - panelW) >> 1;

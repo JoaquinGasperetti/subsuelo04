@@ -70,9 +70,51 @@ export function isPosWalkable(grid, nx, ny, margin = 0.25) {
     return true;
 }
 
-export const LORE_MESSAGES = [
-    "NOTA #01: El disyuntor central corta las rejas de los sectores Este y Oeste.",
-    "NOTA #02: No corras cerca suyo. Si apagas la linterna y te quedas quieto, pierde tu rastro.",
-    "NOTA #03: Si te mira de frente, ilumina sus ojos para frenar su avance.",
-    "NOTA #04: Los 4 fusibles alimentan la compuerta de evacuacion al Norte (arriba en el plano)."
+export const LORE_NOTES = [
+    {
+        code: "REGISTRO #01 - INGENIERIA",
+        summary: "El disyuntor central corta las rejas de los sectores Este y Oeste.",
+        lines: [
+            "FECHA: 14/10 - TURNO NOCHE (SUBSUELO 04)",
+            "Tras el apagon se cerraron las rejas de contencion",
+            "hacia los sectores Este y Oeste.",
+            "El DISYUNTOR ROJO en el nucleo central libera",
+            "las trabas magneticas. Si bajas, ve directo alli."
+        ]
+    },
+    {
+        code: "REGISTRO #02 - SEGURIDAD",
+        summary: "No corras cerca suyo. Apaga la linterna y quedate quieto para esconderte.",
+        lines: [
+            "INFORME DE GUARDIA - ANOMALIA EN PASILLO SUR",
+            "Esa cosa reacciona al ruido de pisadas rapidas",
+            "y al haz directo de nuestras linternas tacticas.",
+            "Si sientes el pulso dispararse, apaga la luz [TRIANGULO]",
+            "y evita correr: en la oscuridad pierde tu rastro."
+        ]
+    },
+    {
+        code: "REGISTRO #03 - PROTOCOLO",
+        summary: "Si te mira de frente, ilumina sus ojos para frenar su avance.",
+        lines: [
+            "OBSERVACION DE CAMPO - COMPORTAMIENTO VISUAL",
+            "Aunque la luz lo atrae desde lejos, el haz concentrado",
+            "directo en sus ojos lo desorienta por unos segundos.",
+            "Usalo solo para ganar distancia cuando te acorrale",
+            "en un pasillo estrecho. Cuida la bateria."
+        ]
+    },
+    {
+        code: "REGISTRO #04 - EVACUACION",
+        summary: "Los 4 fusibles alimentan la compuerta de evacuacion al Norte.",
+        lines: [
+            "ORDEN DE EMERGENCIA - COMPUERTA NORTE",
+            "La salida blindada al Norte (arriba en el plano PDA)",
+            "requiere los 4 FUSIBLES industriales de respaldo.",
+            "Cuando el panel pase a VERDE, corre hacia la compuerta.",
+            "No mires atras."
+        ]
+    }
 ];
+
+export const LORE_MESSAGES = LORE_NOTES.map(n => n.code + ": " + n.summary);

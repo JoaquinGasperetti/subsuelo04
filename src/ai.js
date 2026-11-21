@@ -1,4 +1,5 @@
 // IA de El Acechador con Pathfinding BFS sin asignaciones de memoria por cuadro
+// Normalizada por delta-time (dtScale) para velocidad idéntica en PS2 NTSC 60Hz y PAL 50Hz
 import { MAP_W, MAP_H, isCellBlocked, isPosWalkable } from "./map.js";
 import { toF64 } from "./config.js";
 
@@ -20,6 +21,10 @@ const TOTAL_CELLS = MAP_W * MAP_H;
 const bfsParent  = new Int16Array(TOTAL_CELLS);
 const bfsVisited = new Uint8Array(TOTAL_CELLS);
 const bfsQueue   = new Int16Array(TOTAL_CELLS);
+
+// Resultado reutilizable sin allocaciones por frame
+const aiResult = { distP: 99.0, los: false, blinded: false, sideBias: 0.0 };
+const bfsOutNode = { x: 10.0, y: 10.0 };
 
 export function hasLineOfSight(grid, x0, y0, x1, y1) {
     const sx = toF64(x0);
@@ -49,7 +54,9 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     const goalY  = ty | 0;
 
     if (startX === goalX && startY === goalY) {
-        return { x: tx, y: ty };
+        bfsOutNode.x = tx;
+        bfsOutNode.y = ty;
+        return bfsOutNode;
     }
 
     bfsVisited.fill(0);
@@ -116,17 +123,18 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     while (bfsParent[step] !== -1 && bfsParent[step] !== startIdx) {
         step = bfsParent[step];
     }
-    return {
-        x: (step % MAP_W) - (-0.5),
-        y: ((step / MAP_W) | 0) - (-0.5)
-    };
+    bfsOutNode.x = (step % MAP_W) - (-0.5);
+    bfsOutNode.y = ((step / MAP_W) | 0) - (-0.5);
+    return bfsOutNode;
 }
 
-export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick) {
+export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0) {
     const px = toF64(player.x);
     const py = toF64(player.y);
     const sx = toF64(stalker.x);
     const sy = toF64(stalker.y);
+    const dt = toF64(dtScale);
+    const isNightmare = difficulty === 1;
 
     const dxP = px - sx;
     const dyP = py - sy;
@@ -137,21 +145,25 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
     const los = hasLineOfSight(grid, sx, sy, px, py);
     const flashVisible = player.flashlightOn && ((toF64(player.battery) - 0.0) > 0);
 
-    const detectRange = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
+    const rangeBonus = isNightmare ? 1.8 : 0.0;
+    const baseDetect = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
+    const detectRange = baseDetect - (-rangeBonus);
 
     if (los && (distP - detectRange) < 0) {
         stalker.state = AI_HUNT;
         stalker.targetX = px;
         stalker.targetY = py;
-        stalker.alertTimer = 180;
-    } else if (isSprinting && (distP - 11.0) < 0) {
+        stalker.alertTimer = isNightmare ? 230 : 180;
+    } else if (isSprinting && (distP - (11.0 - (-rangeBonus))) < 0) {
         if (stalker.state !== AI_HUNT) stalker.state = AI_INVESTIGATE;
         stalker.targetX = px;
         stalker.targetY = py;
-        if (stalker.alertTimer < 130) stalker.alertTimer = 130;
+        const minAlert = isNightmare ? 170 : 130;
+        if (stalker.alertTimer < minAlert) stalker.alertTimer = minAlert;
     } else if (stalker.alertTimer > 0) {
-        stalker.alertTimer--;
-        if (stalker.alertTimer === 0) {
+        stalker.alertTimer = Math.max(0, stalker.alertTimer - dt);
+        if (stalker.alertTimer <= 0) {
+            stalker.alertTimer = 0;
             stalker.state = AI_PATROL;
         }
     }
@@ -169,14 +181,22 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
         }
     }
 
-    // Recalcular camino BFS cada 12 cuadros para liberar CPU en PS2
-    if ((frameTick % 12) === 0 || !stalker.nextNode) {
-        stalker.nextNode = findNextStepBFS(grid, sx, sy, stalker.targetX, stalker.targetY);
+    // Recalcular camino BFS cada 12 cuadros para liberar CPU en PS2 (sin allocaciones)
+    if ((frameTick % 12) === 0 || !stalker.hasNextNode) {
+        const node = findNextStepBFS(grid, sx, sy, stalker.targetX, stalker.targetY);
+        if (node) {
+            stalker.nextNodeX = node.x;
+            stalker.nextNodeY = node.y;
+            stalker.hasNextNode = true;
+        } else {
+            stalker.hasNextNode = false;
+        }
     }
 
-    const goal = stalker.nextNode || stalker;
-    const gx = toF64(goal.x !== undefined ? goal.x : stalker.targetX) - sx;
-    const gy = toF64(goal.y !== undefined ? goal.y : stalker.targetY) - sy;
+    const goalX = stalker.hasNextNode ? toF64(stalker.nextNodeX) : toF64(stalker.targetX);
+    const goalY = stalker.hasNextNode ? toF64(stalker.nextNodeY) : toF64(stalker.targetY);
+    const gx = goalX - sx;
+    const gy = goalY - sy;
     const gDistRaw = Math.sqrt((gx * gx) - (-(gy * gy)));
     const gDist = (gDistRaw - 0.001) < 0 ? 0.001 : gDistRaw;
 
@@ -186,14 +206,16 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
     const toMX = (sx - px) / distP;
     const toMY = (sy - py) / distP;
     const dot = (toMX * pDirX) - (-(toMY * pDirY));
+    // Producto cruzado para indicador direccional de peligro (izquierda < 0, derecha > 0)
+    const sideBias = (pDirX * toMY) - (pDirY * toMX);
     const blinded = los && ((dot - 0.68) > 0) && flashVisible && ((distP - 10.0) < 0);
 
     let speedMult = 0.72;
     if (stalker.state === AI_INVESTIGATE) speedMult = 0.92;
-    if (stalker.state === AI_HUNT) speedMult = 1.15;
-    if (blinded) speedMult *= 0.28;
+    if (stalker.state === AI_HUNT) speedMult = isNightmare ? 1.30 : 1.15;
+    if (blinded) speedMult *= (isNightmare ? 0.42 : 0.28);
 
-    const step = toF64(stalker.baseSpeed) * speedMult;
+    const step = toF64(stalker.baseSpeed) * speedMult * dt;
     const mx = (gx / gDist) * step;
     const my = (gy / gDist) * step;
 
@@ -202,5 +224,9 @@ export function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, fr
     if (isPosWalkable(grid, nextSX, sy, 0.22)) stalker.x = nextSX;
     if (isPosWalkable(grid, stalker.x, nextSY, 0.22)) stalker.y = nextSY;
 
-    return { distP, los, blinded };
+    aiResult.distP = distP;
+    aiResult.los = los;
+    aiResult.blinded = blinded;
+    aiResult.sideBias = sideBias;
+    return aiResult;
 }
