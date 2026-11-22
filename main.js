@@ -11,8 +11,8 @@
 
 // Ajustes modificables desde el menú de Opciones (y persistibles en Memory Card)
 const GAME_SETTINGS = {
-    // Calidad del raycaster: 0 = ALTA (160 rayos), 1 = EQUILIBRADA (128 rayos, ideal PS2 real), 2 = RENDIMIENTO (96 rayos)
-    qualityIndex: 1,
+    // Motor grafico: 0 = 3D VU1 (STREAM progresivo), 1 = 2.5D EQUILIBRADA (96), 2 = 2.5D RAPIDA (64)
+    qualityIndex: 0,
     // Margen de seguridad para televisores CRT con overscan (true = seguro CRT, false = pantalla completa HD/emulador)
     crtSafe: true,
     // Relación de aspecto de TV: true = 16:9 panorámico (corrige estiramiento), false = 4:3 clásico
@@ -36,7 +36,7 @@ const GAME_SETTINGS = {
 };
 
 const QUALITY_RAYS = [128, 96, 64];
-const QUALITY_LABELS = ["ALTA (128)", "EQUILIBRADA (96)", "RAPIDA (64)"];
+const QUALITY_LABELS = ["3D VU1 STREAM", "2.5D MEDIA", "2.5D RAPIDA"];
 const SENS_TURN_SPEED = [0.024, 0.034, 0.046];
 const SENS_LABELS = ["BAJA", "MEDIA", "ALTA"];
 const DIFF_LABELS = ["NORMAL", "PESADILLA"];
@@ -908,44 +908,57 @@ let hwPropObjs = {};
 let hwStalkerObj = null;
 let hwStalkerIsGltf = false;
 
-// Estado de carga progresiva (1 recurso por cuadro con barra de progreso real)
-// Orden seguro en PS2 real: primero modulos IOP y streams de audio (en pausa) con RAM/IOP limpios,
-// luego Z-Buffer + modelos 3D, y recien al final reproducir audio cuando el USB queda libre.
-let hwLoadStep = 0;
-let hwLoadPhase = 0; // 0 = dibujar nombre en pantalla, 1 = cargar recurso del USB
-let hwLoadDone = false;
-let hwLoadFailed = false;
-let hwLoadSkipAudio = false;
-let hwLoadErrorMsg = "";
-let hwLoadOkCount = 0;
+// ============================================================================
+// ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO DURANTE EL JUEGO
+// Evita cargar todo en VRAM/RAM de golpe al iniciar; streamea 1 malla cada 18 cuadros
+// mientras ya estas jugando, con culling por distancia para cuidar VU1 y GS VRAM (4 MB).
+// ============================================================================
+let bootLoadStep = 0;
+let bootLoadPhase = 0;
+let bootLoadDone = false;
+let bootSkipAudio = false;
 
-const HW3D_LOAD_STEPS = [
+const BOOT_LOAD_STEPS = [
     { kind: "audio_iop",   label: "AUDIO: MODULOS IOP (libsd / audsrv)" },
     { kind: "audio_amb",   label: "AUDIO: STREAM (ambient.wav)" },
     { kind: "audio_chase", label: "AUDIO: STREAM (chase.wav)" },
-    { kind: "init",        label: "CONFIGURANDO Z-BUFFER, CAMARA Y VU1..." },
-    { kind: "static",      obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "MAPA: PISO (map_floor.obj)" },
-    { kind: "static",      obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "MAPA: TECHO (map_ceiling.obj)" },
-    { kind: "static",      obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "MAPA: HORMIGON (map_walls_concrete.obj)" },
-    { kind: "static",      obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "MAPA: OXIDO (map_walls_rust.obj)" },
-    { kind: "static",      obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "MAPA: RITUAL (map_walls_ritual.obj)" },
-    { kind: "static",      obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "MAPA: SALIDA (map_exit.obj)" },
-    { kind: "gates",       obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS (map_gates.obj)" },
-    { kind: "prop",        key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEM: FUSIBLE (fuse.obj)" },
-    { kind: "prop",        key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEM: BATERIA (battery.obj)" },
-    { kind: "prop",        key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEM: DISYUNTOR (breaker.obj)" },
-    { kind: "prop",        key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEM: REGISTRO (note.obj)" },
-    { kind: "stalker",     obj: "assets/models/stalker.glb",            tex: "assets/textures/stalker.png",       label: "ENTIDAD: ACECHADOR (stalker.glb)" },
-    { kind: "audio_play",  label: "ACTIVANDO AUDIO Y MENU PRINCIPAL..." }
+    { kind: "audio_play",  label: "ENTRANDO AL MENU PRINCIPAL..." }
 ];
 
-const LOAD_PCT_LABELS = [
-    "0%   (0/17)",  "6%   (1/17)",  "12%  (2/17)",  "18%  (3/17)",  "24%  (4/17)",
-    "29%  (5/17)",  "35%  (6/17)",  "41%  (7/17)",  "47%  (8/17)",  "53%  (9/17)",
-    "59%  (10/17)", "65%  (11/17)", "71%  (12/17)", "76%  (13/17)", "82%  (14/17)",
-    "88%  (15/17)", "94%  (16/17)", "100% (17/17)"
+const BOOT_PCT_LABELS = [
+    "0%   (0/4)", "25%  (1/4)", "50%  (2/4)", "75%  (3/4)", "100% (4/4)"
 ];
 const LOAD_SPINNERS = ["|", "/", "-", "\\"];
+
+// Cola de streaming 3D progresivo durante STATE_PLAY (1 recurso cada ~18 frames)
+let hwStreamStep = 0;
+let hwStreamCooldown = 12;
+let hwStreamDone = false;
+let hwStreamFailed = false;
+let hwLoadErrorMsg = "";
+
+const HW3D_STREAM_STEPS = [
+    { kind: "init",    label: "3D: VU1/CAMARA" },
+    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "3D: PISO" },
+    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "3D: TECHO" },
+    { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "3D: PAREDES" },
+    { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "3D: OXIDO" },
+    { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "3D: RITUAL" },
+    { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "3D: SALIDA" },
+    { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "3D: REJAS" },
+    { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "3D: FUSIBLES" },
+    { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "3D: BATERIAS" },
+    { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "3D: DISYUNTOR" },
+    { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "3D: NOTAS" },
+    { kind: "stalker", obj: "assets/models/stalker.obj",            tex: "assets/textures/stalker.png",       label: "3D: ACECHADOR" }
+];
+
+const STREAM_3D_BADGES = [
+    "CARGANDO 3D: 0/13",  "CARGANDO 3D: 1/13",  "CARGANDO 3D: 2/13",  "CARGANDO 3D: 3/13",
+    "CARGANDO 3D: 4/13",  "CARGANDO 3D: 5/13",  "CARGANDO 3D: 6/13",  "CARGANDO 3D: 7/13",
+    "CARGANDO 3D: 8/13",  "CARGANDO 3D: 9/13",  "CARGANDO 3D: 10/13", "CARGANDO 3D: 11/13",
+    "CARGANDO 3D: 12/13", "3D VU1 LISTO"
+];
 
 function loadHwMesh(objPath, texPath) {
     if (!fileExistsSafe(objPath)) return null;
@@ -959,7 +972,7 @@ function loadHwMesh(objPath, texPath) {
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
         if (!data) return null;
-        try { data.accurate_clipping = true; } catch (_) {}
+        try { data.accurate_clipping = false; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try { data.pipeline = Render.PL_DEFAULT; } catch (_) {}
         const obj = new RenderObject(data);
@@ -974,37 +987,13 @@ function loadHwMesh(objPath, texPath) {
     }
 }
 
-function loadHwStalker(glbPath, fallbackTexPath) {
-    if (fileExistsSafe(glbPath)) {
-        try {
-            const data = new RenderData(glbPath);
-            if (data) {
-                let hasTex = false;
-                try { hasTex = !!(typeof data.getTexture === "function" && data.getTexture(0)); } catch (_) {}
-                if (!hasTex && fallbackTexPath && fileExistsSafe(fallbackTexPath) && typeof data.setTexture === "function") {
-                    try {
-                        const ftex = new Image(fallbackTexPath);
-                        if (ftex && typeof ftex.optimize === "function") ftex.optimize();
-                        if (ftex) data.setTexture(0, ftex);
-                    } catch (_) {}
-                }
-                try { data.accurate_clipping = true; } catch (_) {}
-                try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
-                try { data.pipeline = Render.PL_DEFAULT; } catch (_) {}
-                const obj = new RenderObject(data);
-                if (obj) {
-                    obj.position = { x: 0.0, y: 0.0, z: 0.0 };
-                    obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
-                    hwStalkerIsGltf = true;
-                    return obj;
-                }
-            }
-        } catch (e) {
-            hwLoadErrorMsg = e ? String(e) : "Error GLB";
-        }
-    }
+function loadHwStalker(objPath, texPath) {
     hwStalkerIsGltf = false;
-    return loadHwMesh("assets/models/stalker_placeholder.obj", fallbackTexPath);
+    let obj = loadHwMesh(objPath, texPath);
+    if (!obj) {
+        obj = loadHwMesh("assets/models/stalker_placeholder.obj", texPath);
+    }
+    return obj;
 }
 
 function updateHw3dProjection() {
@@ -1012,29 +1001,26 @@ function updateHw3dProjection() {
     if (hw3dLastWide === isWide) return;
     hw3dLastWide = isWide;
     try {
-        Render.setView(isWide ? 62.0 : 54.0, 0.25, 36.0);
+        Render.setView(isWide ? 62.0 : 54.0, 0.5, 50.0);
     } catch (_) {}
 }
 
-function stepHardware3DLoad() {
-    if (hwLoadDone) return true;
-    const total = HW3D_LOAD_STEPS.length;
-    if (hwLoadStep >= total) {
-        hw3dReady = (!hwLoadFailed && hwStaticObjs.length >= 3);
-        hwLoadDone = true;
+function stepBootLoad() {
+    if (bootLoadDone) return true;
+    const total = BOOT_LOAD_STEPS.length;
+    if (bootLoadStep >= total) {
+        bootLoadDone = true;
         return true;
     }
-
-    const step = HW3D_LOAD_STEPS[hwLoadStep];
+    const step = BOOT_LOAD_STEPS[bootLoadStep];
     try {
         if (step.kind === "audio_iop") {
-            if (!hwLoadSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound) {
+            if (!bootSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound) {
                 audioInitAttempted = true;
                 ensureAudioIOP();
             }
-            hwLoadOkCount++;
         } else if (step.kind === "audio_amb") {
-            if (!hwLoadSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
+            if (!bootSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
                 const ambPath = resolveFirstExisting([
                     "assets/audio/ambient.wav",
                     "assets/audio/ambient.ogg",
@@ -1050,9 +1036,8 @@ function stepHardware3DLoad() {
                     }
                 }
             }
-            hwLoadOkCount++;
         } else if (step.kind === "audio_chase") {
-            if (!hwLoadSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
+            if (!bootSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
                 const chasePath = resolveFirstExisting([
                     "assets/audio/chase.wav",
                     "assets/audio/chase.ogg"
@@ -1066,84 +1051,108 @@ function stepHardware3DLoad() {
                     }
                 }
             }
-            hwLoadOkCount++;
-        } else if (step.kind === "init") {
-            hw3dAttempted = true;
-            if (typeof Render === "undefined" || typeof RenderData !== "function" ||
-                typeof RenderObject !== "function" || typeof Camera === "undefined" ||
-                typeof Lights === "undefined" || typeof Image !== "function" ||
-                !fileExistsSafe("assets/models/map_floor.obj")) {
-                hwLoadFailed = true;
-                hw3dReady = false;
-                hwLoadStep = total - 1;
-                return false;
-            }
-            try {
-                const canvas = Screen.getMode();
-                if (canvas && typeof Screen.setMode === "function") {
-                    canvas.zbuffering = true;
-                    if (typeof Screen.Z16S !== "undefined") canvas.psmz = Screen.Z16S;
-                    Screen.setMode(canvas);
-                }
-            } catch (_) {}
-            try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
-            updateHw3dProjection();
-            Camera.type(Camera.LOOKAT);
-
-            hwLightMain = Lights.new();
-            hwLightFill = Lights.new();
-            Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
-            Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
-            Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
-            hwStaticObjs = [];
-            hwLoadOkCount++;
-        } else if (step.kind === "static") {
-            const o = loadHwMesh(step.obj, step.tex);
-            if (o) {
-                hwStaticObjs.push(o);
-                hwLoadOkCount++;
-            }
-        } else if (step.kind === "gates") {
-            hwGatesObj = loadHwMesh(step.obj, step.tex);
-            if (hwGatesObj) hwLoadOkCount++;
-        } else if (step.kind === "prop") {
-            const o = loadHwMesh(step.obj, step.tex);
-            if (o) {
-                hwPropObjs[step.key] = o;
-                hwLoadOkCount++;
-            }
-        } else if (step.kind === "stalker") {
-            hwStalkerObj = loadHwStalker(step.obj, step.tex);
-            if (hwStalkerObj) hwLoadOkCount++;
         } else if (step.kind === "audio_play") {
-            requestGC();
-            if (!hwLoadSkipAudio && (ambientStream || chaseStream)) {
+            if (!bootSkipAudio && (ambientStream || chaseStream)) {
                 audioReady = true;
                 audioPlaying = false;
                 activeTrack = "ambient";
                 lastAppliedVol = -1;
                 applyAudioVolume(GAME_SETTINGS.audioVolume);
             }
-            hwLoadOkCount++;
         }
-    } catch (e) {
-        hwLoadErrorMsg = e ? String(e) : "Excepcion en carga";
-    }
+    } catch (_) {}
 
-    hwLoadStep++;
-    if (hwLoadStep >= total) {
-        hw3dReady = (!hwLoadFailed && hwStaticObjs.length >= 3);
-        hwLoadDone = true;
+    bootLoadStep++;
+    if (bootLoadStep >= total) {
+        bootLoadDone = true;
         return true;
     }
     return false;
+}
+
+function tickProgressive3DStream() {
+    if (GAME_SETTINGS.qualityIndex !== 0) return;
+    if (hwStreamDone || hwStreamFailed) return;
+    if (hwStreamCooldown > 0) {
+        hwStreamCooldown--;
+        return;
+    }
+    // Espaciar cada carga 18 cuadros (~0.3s) para no trabar la partida ni saturar el USB 1.1
+    hwStreamCooldown = 18;
+
+    const total = HW3D_STREAM_STEPS.length;
+    if (hwStreamStep >= total) {
+        hwStreamDone = true;
+        return;
+    }
+
+    const step = HW3D_STREAM_STEPS[hwStreamStep];
+    try {
+        if (step.kind === "init") {
+            hw3dAttempted = true;
+            if (typeof Render === "undefined" || typeof RenderData !== "function" ||
+                typeof RenderObject !== "function" || typeof Camera === "undefined" ||
+                typeof Lights === "undefined" || typeof Image !== "function" ||
+                !fileExistsSafe("assets/models/map_floor.obj")) {
+                hwStreamFailed = true;
+                hw3dReady = false;
+                return;
+            }
+            try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
+            updateHw3dProjection();
+            Camera.type(Camera.LOOKAT);
+
+            let l0 = 0;
+            let l1 = 1;
+            try {
+                if (typeof Lights.new === "function") {
+                    const a = Lights.new();
+                    const b = Lights.new();
+                    if (typeof a === "number" && a >= 0 && a <= 3) l0 = a;
+                    if (typeof b === "number" && b >= 0 && b <= 3) l1 = b;
+                }
+            } catch (_) {}
+            hwLightMain = l0;
+            hwLightFill = l1;
+            try {
+                Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
+                Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
+                Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
+            } catch (_) {}
+            hwStaticObjs = [];
+        } else if (step.kind === "static") {
+            const o = loadHwMesh(step.obj, step.tex);
+            if (o) hwStaticObjs.push(o);
+            // Apenas cargan piso, techo, hormigon y oxido (4 mallas base), activa el 3D VU1!
+            if (hwStaticObjs.length >= 4) {
+                hw3dReady = true;
+            }
+        } else if (step.kind === "gates") {
+            hwGatesObj = loadHwMesh(step.obj, step.tex);
+        } else if (step.kind === "prop") {
+            const o = loadHwMesh(step.obj, step.tex);
+            if (o) hwPropObjs[step.key] = o;
+        } else if (step.kind === "stalker") {
+            hwStalkerObj = loadHwStalker(step.obj, step.tex);
+        }
+    } catch (e) {
+        hwLoadErrorMsg = e ? String(e) : "Error stream 3D";
+        hwStreamFailed = true;
+        hw3dReady = false;
+        return;
+    }
+
+    hwStreamStep++;
+    if (hwStreamStep >= total) {
+        hwStreamDone = true;
+    }
 }
 
 function drawLoadingScreen(screenW, screenH, fnt) {
     Draw.rect(0, 0, screenW, screenH, rgba(7, 6, 10, 128));
 
     const panelW = Math.min(540, screenW - 56);
-    const panelH = 258;
+    const panelH = 236;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
@@ -1159,10 +1168,10 @@ function drawLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.54);
     fnt.color = rgba(190, 195, 210, 128);
-    fnt.print(px + 24, py + 56, "CARGANDO MOTOR 3D VU1 EN PS2");
+    fnt.print(px + 24, py + 56, "INICIANDO SISTEMA PS2 (3D EN STREAMING)");
 
-    const total = HW3D_LOAD_STEPS.length;
-    const clampedStep = hwLoadStep < 0 ? 0 : (hwLoadStep > total ? total : hwLoadStep);
+    const total = BOOT_LOAD_STEPS.length;
+    const clampedStep = bootLoadStep < 0 ? 0 : (bootLoadStep > total ? total : bootLoadStep);
     const barX = px + 24;
     const barY = py + 90;
     const barW = panelW - 48;
@@ -1178,7 +1187,7 @@ function drawLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.60);
     fnt.color = rgba(255, 232, 160, 128);
-    fnt.print(barX, barY + 38, LOAD_PCT_LABELS[clampedStep] || "0%   (0/17)");
+    fnt.print(barX, barY + 38, BOOT_PCT_LABELS[clampedStep] || "0%   (0/4)");
 
     const spinIdx = ((frameTick >> 2) & 3);
     fnt.scale = Math.fround(0.60);
@@ -1194,15 +1203,14 @@ function drawLoadingScreen(screenW, screenH, fnt) {
     Draw.rect(barX, scanY, barW, 5, rgba(32, 36, 48, 128));
     Draw.rect(barX + scanOff, scanY, scanW, 5, rgba(90, 220, 255, 128));
 
-    const curStep = HW3D_LOAD_STEPS[clampedStep < total ? clampedStep : (total - 1)];
+    const curStep = BOOT_LOAD_STEPS[clampedStep < total ? clampedStep : (total - 1)];
     fnt.scale = Math.fround(0.50);
     fnt.color = rgba(235, 238, 245, 128);
-    fnt.print(barX, barY + 84, curStep ? curStep.label : "FINALIZANDO...");
+    fnt.print(barX, barY + 84, curStep ? curStep.label : "LISTO");
 
     fnt.scale = Math.fround(0.45);
     fnt.color = rgba(160, 170, 185, 128);
-    fnt.print(barX, py + panelH - 44, "[START] MODO RAPIDO 2.5D");
-    fnt.print(barX, py + panelH - 22, "[CIRCULO] CARGAR SIN AUDIO");
+    fnt.print(barX, py + panelH - 26, "[CIRCULO] ENTRAR SIN AUDIO");
 }
 
 function renderHardware3DWorld(
@@ -1234,23 +1242,24 @@ function renderHardware3DWorld(
     const lowFlicker = (flashActive && ((pbat - 24.0) < 0) && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.30 : 1.0;
     const effFlash = toF64(flashActive ? (fInt * lowFlicker) : 0.0);
 
-    // Luz principal dinámica alineada con la linterna del jugador + tinte rojo por cercanía del Acechador
     const lPow = 0.22 + effFlash * 0.92;
     const redTint = dRatio * 0.38;
-    Lights.set(hwLightMain, Lights.DIRECTION, -dirX, -0.22, -dirZ);
-    Lights.set(hwLightMain, Lights.AMBIENT, 0.14 + redTint * 0.35, 0.15, 0.18);
-    Lights.set(hwLightMain, Lights.DIFFUSE, Math.min(1.2, lPow + redTint), lPow * 0.96, lPow * 0.90);
+    if (hwLightMain >= 0 && hwLightMain <= 3) {
+        Lights.set(hwLightMain, Lights.DIRECTION, -dirX, -0.22, -dirZ);
+        Lights.set(hwLightMain, Lights.AMBIENT, 0.14 + redTint * 0.35, 0.15, 0.18);
+        Lights.set(hwLightMain, Lights.DIFFUSE, Math.min(1.2, lPow + redTint), lPow * 0.96, lPow * 0.90);
+    }
 
-    // 1. Escenario estático 3D por hardware (piso, techo, paredes, salida)
+    // 1. Escenario estatico 3D (se va sumando progresivamente)
     for (let i = 0; i < hwStaticObjs.length; i++) {
         hwStaticObjs[i].render();
     }
-    // 2. Rejas 3D (desaparecen al activar el Disyuntor)
+    // 2. Rejas 3D
     if (hwGatesObj && !breakerActive) {
         hwGatesObj.render();
     }
 
-    // 3. Ítems 3D flotando y girando suavemente
+    // 3. Items 3D con culling por distancia (< 17m / 8.5 celdas)
     const spinY = toF64(frameTick * 0.03);
     const bobY = toF64(Math.sin(frameTick * 0.08) * 0.08);
     for (let i = 0; i < entities.length; i++) {
@@ -1258,6 +1267,9 @@ function renderHardware3DWorld(
         if (e.taken) continue;
         const prop = hwPropObjs[e.kind];
         if (!prop) continue;
+        const dxC = toF64(e.x) - px;
+        const dyC = toF64(e.y) - py;
+        if ((dxC * dxC + dyC * dyC) > 72.25) continue;
         const ex = toF64(e.x) * WORLD_CELL_SIZE;
         const ez = toF64(e.y) * WORLD_CELL_SIZE;
         let ey = 0.55 + bobY;
@@ -1268,17 +1280,21 @@ function renderHardware3DWorld(
         prop.render();
     }
 
-    // 4. El Acechador en 3D (stalker.glb si existe, o placeholder 3D)
+    // 4. El Acechador en 3D con culling por distancia (< 19m / 9.5 celdas)
     if (hwStalkerObj) {
-        const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
-        const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
-        const faceAng = Math.atan2(camX - sx, camZ - sz);
-        hwStalkerObj.position = { x: sx, y: 0.0, z: sz };
-        hwStalkerObj.rotation = { x: 0.0, y: faceAng, z: 0.0 };
-        hwStalkerObj.render();
+        const sdxC = toF64(stalker.x) - px;
+        const sdyC = toF64(stalker.y) - py;
+        if ((sdxC * sdxC + sdyC * sdyC) <= 90.25) {
+            const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
+            const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
+            const faceAng = Math.atan2(camX - sx, camZ - sz);
+            hwStalkerObj.position = { x: sx, y: 0.0, z: sz };
+            hwStalkerObj.rotation = { x: 0.0, y: faceAng, z: 0.0 };
+            hwStalkerObj.render();
+        }
     }
 
-    // 5. Linterna en mano (viewmodel 2D) y viñeta sutil
+    // 5. Linterna en mano (viewmodel 2D) y vineta sutil
     const enableBob = GAME_SETTINGS.bob;
     const vmBobOffset = enableBob ? ((Math.sin(pbob) * 3.0) | 0) : 0;
     const vmSwayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 2.0) | 0) : 0;
@@ -1302,7 +1318,7 @@ function render3DWorld(
     dangerRatio, frameTick, exitUnlocked, fov, flashIntensity,
     mapAnim = 0.0, sideBias = 0.0
 ) {
-    if (hw3dReady) {
+    if (hw3dReady && GAME_SETTINGS.qualityIndex === 0 && gameState === STATE_PLAY) {
         renderHardware3DWorld(
             screenW, screenH, player, stalker, entities,
             dangerRatio, frameTick, exitUnlocked, flashIntensity, mapAnim, sideBias
@@ -2272,7 +2288,7 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
     const volLabel = (volIdx >= 0 && volIdx < VOL_LABELS.length) ? VOL_LABELS[volIdx] : "0%";
     const audioVal = (GAME_SETTINGS.audioVolume === 0) ? "APAGADO (0%)" : (isAudioReady() ? volLabel : "NO DISPONIBLE");
     const rows = [
-        { label: "CALIDAD 3D",     val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
+        { label: "MOTOR GRAFICO",  val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
         { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
         { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
         { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
@@ -2609,6 +2625,13 @@ function drawPadDisconnectedOverlay(screenW, screenH, fnt) {
 
 
 const screenMode = Screen.getMode();
+if (screenMode && typeof Screen.setMode === "function") {
+    try {
+        screenMode.zbuffering = true;
+        if (typeof Screen.Z16S !== "undefined") screenMode.psmz = Screen.Z16S;
+        Screen.setMode(screenMode);
+    } catch (_) {}
+}
 const SCREEN_W = (screenMode && screenMode.width) ? screenMode.width : 640;
 const SCREEN_H = (screenMode && screenMode.height) ? screenMode.height : 448;
 const MODE_INFO = {
@@ -2904,27 +2927,23 @@ Screen.display(() => {
             try { os.sleep(3); } catch (_) {}
         }
 
-        // Pantalla de carga progresiva (1 recurso por frame con barra real + indicador de actividad)
+        // Arranque rapido (solo audio IOP/streams; el 3D se carga en streaming dentro de la partida)
         if (gameState === STATE_LOADING) {
             drawLoadingScreen(SCREEN_W, SCREEN_H, fnt);
-            if (frameTick > 2 && pad.justPressed(Pads.START)) {
-                hw3dReady = false;
-                hwLoadDone = true;
+            if (frameTick > 2 && pad.justPressed(Pads.CIRCLE)) {
+                bootSkipAudio = true;
+                audioInitAttempted = true;
+                bootLoadDone = true;
                 gameState = STATE_TITLE;
                 return;
             }
-            if (frameTick > 2 && pad.justPressed(Pads.CIRCLE)) {
-                hwLoadSkipAudio = true;
-                audioInitAttempted = true;
-            }
-            // Frame 1 solo dibuja la pantalla inicial; luego alterna: fase 0 pinta nombre, fase 1 carga
             if (frameTick <= 1) return;
-            if (hwLoadPhase === 0) {
-                hwLoadPhase = 1;
+            if (bootLoadPhase === 0) {
+                bootLoadPhase = 1;
                 return;
             }
-            hwLoadPhase = 0;
-            const finished = stepHardware3DLoad();
+            bootLoadPhase = 0;
+            const finished = stepBootLoad();
             if (finished) {
                 gameState = STATE_TITLE;
             }
@@ -3040,6 +3059,7 @@ Screen.display(() => {
             }
         } else if (gameState === STATE_PLAY) {
             elapsedMs += dtMs;
+            tickProgressive3DStream();
 
             if (pad.justPressed(Pads.START)) {
                 pauseCursor = 0;
@@ -3282,6 +3302,12 @@ Screen.display(() => {
             fnt.scale = Math.fround(0.68);
             fnt.color = rgba(245, 245, 250, 128);
             fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
+            if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
+                Draw.rect(SCREEN_W - sx - 182, topY + 34, 178, 22, rgba(12, 16, 26, 112));
+                fnt.scale = Math.fround(0.46);
+                fnt.color = rgba(110, 230, 255, 128);
+                fnt.print(SCREEN_W - sx - 174, topY + 38, STREAM_3D_BADGES[hwStreamStep] || "CARGANDO 3D...");
+            }
 
             fnt.color = rgba(250, 215, 95, 128);
             fnt.print(sx + 114, topY + 8, getCompassLabel(player.ang));
