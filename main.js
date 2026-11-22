@@ -15,10 +15,12 @@ const GAME_SETTINGS = {
     qualityIndex: 1,
     // Margen de seguridad para televisores CRT con overscan (true = seguro CRT, false = pantalla completa HD/emulador)
     crtSafe: true,
+    // Relación de aspecto de TV: true = 16:9 panorámico (corrige estiramiento), false = 4:3 clásico
+    aspect16x9: true,
     // Sensibilidad de cámara: 0 = BAJA, 1 = MEDIA, 2 = ALTA
     sensitivityIndex: 1,
-    // Vibración DualShock 2
-    rumble: true,
+    // Vibración DualShock 2 (desactivada por defecto para máxima estabilidad SIO2 en OPL)
+    rumble: false,
     // Efectos visuales VHS, viñeta y partículas
     overlays: true,
     // Balanceo de cámara y linterna en mano
@@ -35,7 +37,7 @@ const GAME_SETTINGS = {
 
 const QUALITY_RAYS = [160, 128, 96];
 const QUALITY_LABELS = ["ALTA (160)", "EQUILIBRADA (128)", "RAPIDA (96)"];
-const SENS_TURN_SPEED = [0.038, 0.052, 0.068];
+const SENS_TURN_SPEED = [0.024, 0.034, 0.046];
 const SENS_LABELS = ["BAJA", "MEDIA", "ALTA"];
 const DIFF_LABELS = ["NORMAL", "PESADILLA"];
 
@@ -110,6 +112,7 @@ function loadSaveData() {
                 GAME_SETTINGS.qualityIndex = data.qualityIndex | 0;
             }
             if (typeof data.crtSafe === "boolean") GAME_SETTINGS.crtSafe = data.crtSafe;
+            if (typeof data.aspect16x9 === "boolean") GAME_SETTINGS.aspect16x9 = data.aspect16x9;
             if (typeof data.sensitivityIndex === "number" && data.sensitivityIndex >= 0 && data.sensitivityIndex <= 2) {
                 GAME_SETTINGS.sensitivityIndex = data.sensitivityIndex | 0;
             }
@@ -147,6 +150,7 @@ function saveGameData() {
         const payload = JSON.stringify({
             qualityIndex: GAME_SETTINGS.qualityIndex,
             crtSafe: GAME_SETTINGS.crtSafe,
+            aspect16x9: GAME_SETTINGS.aspect16x9,
             sensitivityIndex: GAME_SETTINGS.sensitivityIndex,
             rumble: GAME_SETTINGS.rumble,
             overlays: GAME_SETTINGS.overlays,
@@ -192,26 +196,28 @@ let audioReady = false;
 let audioPlaying = false;
 let lastAppliedVol = -1;
 
+let audioInitAttempted = false;
 function initAudio() {
+    if (audioReady && ambientStream) return true;
+    if (audioInitAttempted) return false;
+    audioInitAttempted = true;
     try {
         if (typeof Sound === "undefined" || !Sound || typeof Sound.Stream !== "function") return false;
         if (typeof std !== "undefined" && std && typeof std.exists === "function") {
             if (!std.exists("assets/ambient.wav")) return false;
         }
-        ambientStream = Sound.Stream("assets/ambient.wav");
+        ambientStream = new Sound.Stream("assets/ambient.wav");
         if (ambientStream) {
-            ambientStream.loop = true;
+            try { ambientStream.loop = true; } catch (_) {}
             audioReady = true;
+            lastAppliedVol = -1;
             applyAudioVolume(GAME_SETTINGS.audioVolume);
-            if (GAME_SETTINGS.audioVolume > 0) {
-                ambientStream.play();
-                audioPlaying = true;
-            }
             return true;
         }
     } catch (_) {
         ambientStream = null;
         audioReady = false;
+        audioPlaying = false;
     }
     return false;
 }
@@ -361,7 +367,7 @@ const LORE_NOTES = [
     }
 ];
 
-const LORE_MESSAGES = LORE_NOTES.map(n => n.code + ": " + n.summary);
+const LORE_MESSAGES = LORE_NOTES.map(n => [n.code, ": ", n.summary].join(""));
 
 // --- MODULE: src/ai.js ---
 // IA de El Acechador con Pathfinding BFS sin asignaciones de memoria por cuadro
@@ -418,6 +424,10 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     const goalX  = tx | 0;
     const goalY  = ty | 0;
 
+    if (startX < 0 || startX >= MAP_W || startY < 0 || startY >= MAP_H ||
+        goalX < 0 || goalX >= MAP_W || goalY < 0 || goalY >= MAP_H) {
+        return null;
+    }
     if (startX === goalX && startY === goalY) {
         bfsOutNode.x = tx;
         bfsOutNode.y = ty;
@@ -435,7 +445,9 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     let head = 0;
     let tail = 1;
 
-    while (head < tail) {
+    let bfsIter = 0;
+    while (head < tail && bfsIter < TOTAL_CELLS) {
+        bfsIter++;
         const cur = bfsQueue[head++];
         if (cur === goalIdx) {
             found = true;
@@ -450,7 +462,7 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
             if (!bfsVisited[nIdx] && grid[cy][cx + 1] === 0) {
                 bfsVisited[nIdx] = 1;
                 bfsParent[nIdx] = cur;
-                bfsQueue[tail++] = nIdx;
+                if (tail < TOTAL_CELLS) bfsQueue[tail++] = nIdx;
             }
         }
         // Izquierda
@@ -459,7 +471,7 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
             if (!bfsVisited[nIdx] && grid[cy][cx - 1] === 0) {
                 bfsVisited[nIdx] = 1;
                 bfsParent[nIdx] = cur;
-                bfsQueue[tail++] = nIdx;
+                if (tail < TOTAL_CELLS) bfsQueue[tail++] = nIdx;
             }
         }
         // Abajo
@@ -468,7 +480,7 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
             if (!bfsVisited[nIdx] && grid[cy + 1][cx] === 0) {
                 bfsVisited[nIdx] = 1;
                 bfsParent[nIdx] = cur;
-                bfsQueue[tail++] = nIdx;
+                if (tail < TOTAL_CELLS) bfsQueue[tail++] = nIdx;
             }
         }
         // Arriba
@@ -477,7 +489,7 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
             if (!bfsVisited[nIdx] && grid[cy - 1][cx] === 0) {
                 bfsVisited[nIdx] = 1;
                 bfsParent[nIdx] = cur;
-                bfsQueue[tail++] = nIdx;
+                if (tail < TOTAL_CELLS) bfsQueue[tail++] = nIdx;
             }
         }
     }
@@ -485,8 +497,10 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     if (!found) return null;
 
     let step = goalIdx;
-    while (bfsParent[step] !== -1 && bfsParent[step] !== startIdx) {
+    let backGuard = 0;
+    while (step >= 0 && step < TOTAL_CELLS && bfsParent[step] !== -1 && bfsParent[step] !== startIdx && backGuard < TOTAL_CELLS) {
         step = bfsParent[step];
+        backGuard++;
     }
     bfsOutNode.x = (step % MAP_W) - (-0.5);
     bfsOutNode.y = ((step / MAP_W) | 0) - (-0.5);
@@ -732,13 +746,10 @@ function render3DWorld(
     const enableViewmodel = GAME_SETTINGS.viewmodel;
     const enableParticles = GAME_SETTINGS.particles && enableOverlays;
 
-    const bobOffset = enableBob ? ((Math.sin(pbob) * 7.0) | 0) : 0;
-    const swayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 4.0) | 0) : 0;
-    const panicShakeY = (enableBob && (dRatio - 0.30) > 0) ? (((Math.random() - 0.5) * 7.0 * dRatio) | 0) : 0;
-    const panicShakeX = (enableBob && (dRatio - 0.45) > 0) ? (((Math.random() - 0.5) * 4.0 * dRatio) | 0) : 0;
-    let halfH = ((screenH >> 1) + bobOffset + panicShakeY) | 0;
-    if (halfH < 40) halfH = 40;
-    else if (halfH > screenH - 40) halfH = screenH - 40;
+    // Horizonte 100% fijo y estable para evitar mareo 3D; el balanceo sutil solo afecta a la linterna en mano
+    const vmBobOffset = enableBob ? ((Math.sin(pbob) * 3.0) | 0) : 0;
+    const vmSwayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 2.0) | 0) : 0;
+    const halfH = screenH >> 1;
 
     const flashActive = player.flashlightOn && ((pbat - 0.0) > 0);
     const lowFlicker = (flashActive && ((pbat - 24.0) < 0) && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.28 : 1.0;
@@ -765,7 +776,7 @@ function render3DWorld(
 
     // Proyeccion volumetrica del haz de linterna en piso y techo (2 quads Gouraud)
     if ((effFlash - 0.05) > 0) {
-        const spotCx = (screenW >> 1) + swayOffset;
+        const spotCx = (screenW >> 1) + vmSwayOffset;
         let spotAlpha = (effFlash * 44.0) | 0;
         if (spotAlpha > 72) spotAlpha = 72;
         const spotHotCol = rgba(195, 215, 240, spotAlpha);
@@ -788,7 +799,12 @@ function render3DWorld(
 
     const dirX = toF64(Math.cos(pang));
     const dirY = toF64(Math.sin(pang));
-    const planeScale = toF64(Math.tan(fovVal * 0.5));
+    // Corrección geométrica real 16:9 vs 4:3 (la TV 16:9 estira 4:3 horizontalmente 1.333x)
+    const isWide = GAME_SETTINGS.aspect16x9;
+    const basePlane = toF64(Math.tan(fovVal * 0.5));
+    const planeScale = isWide ? toF64(basePlane * 1.3333) : basePlane;
+    const wallProjH = toF64(screenH * 0.92);
+    const spriteAspectX = isWide ? toF64(0.75) : toF64(1.0);
     const planeX = -dirY * planeScale;
     const planeY =  dirX * planeScale;
 
@@ -882,7 +898,7 @@ function render3DWorld(
 
         const screenX = colStartX[i];
         const colW = colWidth[i];
-        const wallH = (screenH / perpDist) | 0;
+        const wallH = (wallProjH / perpDist) | 0;
         const rawStart = halfH - (wallH >> 1);
         const rawEnd = rawStart + wallH;
         const drawStart = rawStart < 0 ? 0 : rawStart;
@@ -970,7 +986,7 @@ function render3DWorld(
         // 2B. REJAS DE SEGURIDAD 3D TRANSPARENTES
         // --------------------------------------------------------------------
         if (hasGate) {
-            const gWallH = (screenH / gateDist) | 0;
+            const gWallH = (wallProjH / gateDist) | 0;
             const gRawStart = halfH - (gWallH >> 1);
             const gRawEnd = gRawStart + gWallH;
             const gStart = gRawStart < 0 ? 0 : gRawStart;
@@ -1058,7 +1074,8 @@ function render3DWorld(
         drawPool[j + 1] = tmp;
     }
 
-    const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+    const rawDet = planeX * dirY - dirX * planeY;
+    const invDet = (Math.abs(rawDet) < 1e-6) ? 1.0 : (1.0 / rawDet);
     const raysPerPx = numRays / screenW;
     for (let s = 0; s < drawCount; s++) {
         const sp = drawPool[s];
@@ -1069,13 +1086,14 @@ function render3DWorld(
 
         if ((transformY - 0.22) <= 0) continue;
 
-        const screenX = (((screenW * 0.5) * (1.0 - (-transformX / transformY))) | 0) + swayOffset + panicShakeX;
-        let spH = (screenH / transformY) | 0;
+        const screenX = ((screenW * 0.5) * (1.0 - (-transformX / transformY))) | 0;
+        if (screenX < -screenW || screenX > (screenW << 1)) continue;
+        let spH = (wallProjH / transformY) | 0;
         if (spH > (screenH << 1)) spH = screenH << 1;
         const colIdx = (screenX * raysPerPx) | 0;
 
         if (sp.kind === "stalker") {
-            const mW = Math.max(14, (spH * 0.48) | 0);
+            const mW = Math.max(12, (spH * 0.48 * spriteAspectX) | 0);
             const mH = (spH * 0.92) | 0;
             const mLeft = screenX - (mW >> 1);
             const stride = Math.sin(frameTick * 0.24);
@@ -1101,76 +1119,79 @@ function render3DWorld(
             const bodyX = Math.max(0, mLeft);
             const bodyW = Math.min(screenW, mLeft + mW) - bodyX;
 
-            const shadowY = Math.min(screenH - 4, mTop + drawH - 2);
-            if (bodyW > 4 && shadowY > halfH) {
-                Draw.rect(bodyX - 2, shadowY, bodyW + 4, Math.max(3, (drawH * 0.05) | 0), COL_SHADOW);
+            const shadowY = Math.min(screenH - 6, mTop + drawH - 2);
+            const shadowH = Math.min(screenH - shadowY, Math.max(3, (drawH * 0.05) | 0));
+            if (bodyW > 4 && shadowY > halfH && shadowH > 0) {
+                const shX = Math.max(0, bodyX - 2);
+                const shW = Math.min(screenW - shX, bodyW + 4);
+                if (shW > 0) Draw.rect(shX, shadowY, shW, shadowH, COL_SHADOW);
             }
 
             const legW = Math.max(3, (mW * 0.22) | 0);
-            const legH = (drawH * 0.34) | 0;
+            const legH = Math.min(screenH, Math.max(2, (drawH * 0.34) | 0));
             const legY = mTop + ((drawH * 0.66) | 0);
             const legOffsetL = (stride * Math.max(2, (legH * 0.14) | 0)) | 0;
             const lLegX = screenX - ((mW * 0.26) | 0);
             const rLegX = screenX + ((mW * 0.06) | 0);
             const darkLimbCol = rgba((22 * stLight) | 0, (10 * stLight) | 0, (14 * stLight) | 0, 128);
-            if (lLegX >= 0 && lLegX + legW <= screenW) {
+            if (lLegX >= 0 && lLegX + legW <= screenW && legH > 0) {
                 Draw.rect(lLegX, Math.max(0, Math.min(screenH - legH, legY + legOffsetL)), legW, legH, darkLimbCol);
             }
-            if (rLegX >= 0 && rLegX + legW <= screenW) {
+            if (rLegX >= 0 && rLegX + legW <= screenW && legH > 0) {
                 Draw.rect(rLegX, Math.max(0, Math.min(screenH - legH, legY - legOffsetL)), legW, legH, darkLimbCol);
             }
 
             if (bodyW > 0) {
-                const torsoTop = mTop + ((drawH * 0.22) | 0);
-                const torsoH = (drawH * 0.48) | 0;
+                const torsoTop = Math.max(0, Math.min(screenH - 4, mTop + ((drawH * 0.22) | 0)));
+                const torsoH = Math.min(screenH - torsoTop, Math.max(2, (drawH * 0.48) | 0));
                 const tColTop = rgba(((42 * stLight) - (-dRatio * 24.0)) | 0, (14 * stLight) | 0, (18 * stLight) | 0, 128);
-                Draw.quad(
-                    bodyX, torsoTop, bodyX + bodyW, torsoTop,
-                    bodyX + ((bodyW * 0.12) | 0), torsoTop + torsoH, bodyX + ((bodyW * 0.88) | 0), torsoTop + torsoH,
-                    tColTop, tColTop, COL_TORSO_BOT, COL_TORSO_BOT
-                );
-                const ribW = (bodyW * 0.60) | 0;
-                const ribX = bodyX + ((bodyW - ribW) >> 1);
-                const ribCol = rgba((125 * stLight) | 0, (88 * stLight) | 0, (85 * stLight) | 0, 115);
-                const ribH = Math.max(2, (torsoH * 0.08) | 0);
-                Draw.rect(ribX, torsoTop + ((torsoH * 0.28) | 0), ribW, ribH, ribCol);
-                Draw.rect(ribX, torsoTop + ((torsoH * 0.56) | 0), ribW, ribH, ribCol);
+                if (torsoH > 0) {
+                    const halfTH = torsoH >> 1;
+                    Draw.rect(bodyX, torsoTop, bodyW, Math.max(1, halfTH), tColTop);
+                    Draw.rect(bodyX + ((bodyW * 0.08) | 0), torsoTop + halfTH, Math.max(1, (bodyW * 0.84) | 0), Math.max(1, torsoH - halfTH), COL_TORSO_BOT);
+                    const ribW = Math.max(1, (bodyW * 0.60) | 0);
+                    const ribX = bodyX + ((bodyW - ribW) >> 1);
+                    const ribCol = rgba((125 * stLight) | 0, (88 * stLight) | 0, (85 * stLight) | 0, 115);
+                    const ribH = Math.max(2, (torsoH * 0.08) | 0);
+                    const r1y = Math.min(screenH - ribH, torsoTop + ((torsoH * 0.28) | 0));
+                    const r2y = Math.min(screenH - ribH, torsoTop + ((torsoH * 0.56) | 0));
+                    Draw.rect(ribX, r1y, ribW, ribH, ribCol);
+                    Draw.rect(ribX, r2y, ribW, ribH, ribCol);
+                }
             }
 
             const armW = Math.max(3, (mW * 0.16) | 0);
-            const armH = (drawH * 0.52) | 0;
+            const armH = Math.min(screenH, Math.max(2, (drawH * 0.52) | 0));
             const armTop = mTop + ((drawH * 0.24) | 0);
             const armSwing = (Math.cos(frameTick * 0.24) * Math.max(2, (mW * 0.12) | 0)) | 0;
             const leftArmX = mLeft - (armW >> 1);
             const rightArmX = mLeft + mW - (armW >> 1);
             const clawCol = rgba((175 * stLight) | 0, (35 * stLight) | 0, 35, 128);
-            if (leftArmX >= 0 && leftArmX + armW <= screenW) {
+            if (leftArmX >= 2 && leftArmX + armW + 2 <= screenW && armH > 0) {
                 const ay = Math.max(0, Math.min(screenH - armH, armTop - armSwing));
                 Draw.rect(leftArmX, ay, armW, armH, darkLimbCol);
                 Draw.rect(leftArmX, Math.min(screenH - 3, ay + armH - 3), armW + 2, 3, clawCol);
             }
-            if (rightArmX >= 0 && rightArmX + armW <= screenW) {
+            if (rightArmX >= 2 && rightArmX + armW + 2 <= screenW && armH > 0) {
                 const ay = Math.max(0, Math.min(screenH - armH, armTop + armSwing));
                 Draw.rect(rightArmX, ay, armW, armH, darkLimbCol);
                 Draw.rect(rightArmX - 2, Math.min(screenH - 3, ay + armH - 3), armW + 2, 3, clawCol);
             }
 
             const headW = (mW * 0.56) | 0;
-            const headH = (drawH * 0.24) | 0;
+            const headH = Math.min(screenH - mTop, Math.max(2, (drawH * 0.24) | 0));
             const headL = screenX - (headW >> 1);
             const headX = Math.max(0, headL);
             const headDrawW = Math.min(screenW, headL + headW) - headX;
             if (headDrawW > 0 && headH > 0) {
                 const skullTopCol = rgba((195 * stLight) | 0, (162 * stLight) | 0, (152 * stLight) | 0, 128);
                 const skullBotCol = rgba((115 * stLight) | 0, (72 * stLight) | 0, (70 * stLight) | 0, 128);
-                Draw.quad(
-                    headX, mTop, headX + headDrawW, mTop,
-                    headX, mTop + headH, headX + headDrawW, mTop + headH,
-                    skullTopCol, skullTopCol, skullBotCol, skullBotCol
-                );
-                const jawW = (headDrawW * 0.54) | 0;
-                const jawH = Math.max(2, (headH * (0.24 - (-dRatio * 0.22))) | 0);
-                Draw.rect(headX + ((headDrawW - jawW) >> 1), mTop + headH - jawH - 1, jawW, jawH, COL_JAW);
+                const halfHH = headH >> 1;
+                Draw.rect(headX, mTop, headDrawW, Math.max(1, halfHH), skullTopCol);
+                Draw.rect(headX, mTop + halfHH, headDrawW, Math.max(1, headH - halfHH), skullBotCol);
+                const jawW = Math.max(2, (headDrawW * 0.54) | 0);
+                const jawH = Math.max(2, Math.min(headH, (headH * (0.24 - (-dRatio * 0.22))) | 0));
+                Draw.rect(headX + ((headDrawW - jawW) >> 1), Math.max(0, mTop + headH - jawH - 1), jawW, jawH, COL_JAW);
             }
 
             const eyeSize = Math.max(2, (headW * 0.22) | 0);
@@ -1190,9 +1211,10 @@ function render3DWorld(
         } else {
             if (colIdx < 0 || colIdx >= numRays || (transformY - zBuffer[colIdx]) >= 0) continue;
             const itemSize = Math.max(8, (spH * 0.32) | 0);
-            const floatBob = (Math.sin((frameTick * 0.10) - (-s)) * 5.0) | 0;
+            const itemW = Math.max(6, (itemSize * spriteAspectX) | 0);
+            const floatBob = (Math.sin((frameTick * 0.10) - (-s)) * 4.0) | 0;
             const iy = Math.max(4, Math.min(screenH - itemSize - 4, halfH + ((spH * 0.14) | 0) + floatBob));
-            const ix = screenX - (itemSize >> 1);
+            const ix = screenX - (itemW >> 1);
 
             if (ix < 2 || ix + itemSize > screenW - 2) continue;
 
@@ -1251,7 +1273,7 @@ function render3DWorld(
     // 5. VIEWMODEL 3D EN PRIMERA PERSONA (MANO + LINTERNA TACTICA)
     // ------------------------------------------------------------------------
     if (enableViewmodel) {
-        renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, bobOffset, swayOffset, mAnim, frameTick);
+        renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, vmBobOffset, vmSwayOffset, mAnim, frameTick);
     }
 
     // ------------------------------------------------------------------------
@@ -1271,9 +1293,9 @@ function render3DWorld(
                 const edgeCol = rgba(220, 18, 22, edgeAlpha);
                 const edgeW = 46;
                 if (sBias < 0) {
-                    Draw.quad(0, 0, edgeW, 0, 0, screenH, edgeW, screenH, edgeCol, COL_EDGE_CLEAR, edgeCol, COL_EDGE_CLEAR);
+                    Draw.rect(0, 0, edgeW >> 1, screenH, edgeCol);
                 } else {
-                    Draw.quad(screenW - edgeW, 0, screenW, 0, screenW - edgeW, screenH, screenW, screenH, COL_EDGE_CLEAR, edgeCol, COL_EDGE_CLEAR, edgeCol);
+                    Draw.rect(screenW - (edgeW >> 1), 0, edgeW >> 1, screenH, edgeCol);
                 }
             }
         }
@@ -1522,11 +1544,11 @@ function drawPanel(x, y, w, h, title, fnt, accentCol = COL_BORDER_RED) {
     Draw.rect(x - 3, y - 3, w + 6, h + 6, accentCol);
     Draw.rect(x, y, w, h, COL_PANEL_BG);
     if (title) {
-        Draw.rect(x, y, w, 30, COL_HEADER_BG);
-        Draw.rect(x, y + 30, w, 1, accentCol);
-        fnt.scale = Math.fround(0.62);
+        Draw.rect(x, y, w, 36, COL_HEADER_BG);
+        Draw.rect(x, y + 36, w, 2, accentCol);
+        fnt.scale = Math.fround(0.78);
         fnt.color = COL_WHITE;
-        fnt.print(x + 14, y + 6, title);
+        fnt.print(x + 14, y + 7, title);
     }
 }
 
@@ -1557,6 +1579,23 @@ const LORE_TABS_LOCK = ["BLOQ #01", "BLOQ #02", "BLOQ #03", "BLOQ #04"];
 const PAUSE_REG_LABELS = ["REGISTROS (0/4)", "REGISTROS (1/4)", "REGISTROS (2/4)", "REGISTROS (3/4)", "REGISTROS (4/4)"];
 const END_OPTS_WIN = ["JUGAR DE NUEVO", "VOLVER AL MENU PRINCIPAL"];
 const END_OPTS_DEAD = ["REINTENTAR", "VOLVER AL MENU PRINCIPAL"];
+const VOL_LABELS = ["0%", "25%", "50%", "75%", "100%"];
+const FUSE_HUD_LABELS = ["FUS:0/4", "FUS:1/4", "FUS:2/4", "FUS:3/4", "FUS:4/4"];
+const FUSE_POPUP_LABELS = ["+1 FUSIBLE (0/4)", "+1 FUSIBLE (1/4)", "+1 FUSIBLE (2/4)", "+1 FUSIBLE (3/4)", "+1 FUSIBLE (4/4)"];
+const FUSE_RADIO_LABELS = [
+    "FUSIBLE RECOLECTADO (0/4). El Acechador se agita...",
+    "FUSIBLE RECOLECTADO (1/4). El Acechador se agita...",
+    "FUSIBLE RECOLECTADO (2/4). El Acechador se agita...",
+    "FUSIBLE RECOLECTADO (3/4). El Acechador se agita...",
+    "FUSIBLE RECOLECTADO (4/4). SALIDA NORTE ABIERTA!"
+];
+const BREAKER_HUD_LABELS = [
+    "JUNTA 4 FUSIBLES (0/4) [SELECT: MAPA]",
+    "JUNTA 4 FUSIBLES (1/4) [SELECT: MAPA]",
+    "JUNTA 4 FUSIBLES (2/4) [SELECT: MAPA]",
+    "JUNTA 4 FUSIBLES (3/4) [SELECT: MAPA]",
+    "SALIDA NORTE ABIERTA! [SELECT: MAPA]"
+];
 
 function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     const { sx, sy } = getSafeMargins();
@@ -1580,55 +1619,55 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     Draw.rect(px, py + 84, panelW, 2, COL_SEL_BAR);
 
     const flicker = ((frameTick % 131) < 4) ? 0.55 : 1.0;
-    fnt.scale = Math.fround(1.05);
+    fnt.scale = Math.fround(1.25);
     fnt.color = rgba((242 * flicker) | 0, (44 * flicker) | 0, (44 * flicker) | 0, 128);
-    fnt.print(px + 22, py + 14, "SUBSUELO 04");
+    fnt.print(px + 20, py + 10, "SUBSUELO 04");
 
-    fnt.scale = Math.fround(0.56);
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_GOLD;
-    fnt.print(px + 24, py + 54, "EL ACECHADOR  |  PS2 SURVIVAL HORROR EDITION");
+    fnt.print(px + 22, py + 54, "EL ACECHADOR - PS2");
 
     // Insignia de récord / Memory Card
-    fnt.scale = Math.fround(0.44);
+    fnt.scale = Math.fround(0.62);
     const best = GAME_SETTINGS.difficulty === 1 ? RECORDS.bestNightmareSec : RECORDS.bestNormalSec;
     if (best > 0) {
         fnt.color = COL_GREEN;
-        fnt.print(px + panelW - 185, py + 20, "RECORD: " + formatTime(best));
+        fnt.print(px + panelW - 210, py + 18, ["RECORD: ", formatTime(best)].join(""));
     } else {
         fnt.color = COL_MUTED;
-        fnt.print(px + panelW - 185, py + 20, "PS2 REAL READY");
+        fnt.print(px + panelW - 210, py + 18, "PS2 REAL");
     }
     fnt.color = RECORDS.mcAvailable ? COL_CYAN : COL_MUTED;
-    fnt.print(px + panelW - 185, py + 38, RECORDS.mcAvailable ? "MC0: DETECTADA" : "MC0: SIN GUARDADO");
+    fnt.print(px + panelW - 210, py + 44, RECORDS.mcAvailable ? "MC0: OK" : "SIN MC0");
 
     // Opciones del Menú Principal (cadenas estáticas sin concatenación por frame para QuickJS PS2)
     const items = GAME_SETTINGS.difficulty === 1 ? TITLE_ITEMS_NIGHTMARE : TITLE_ITEMS_NORMAL;
 
-    const listY = py + 106;
-    const rowH = 38;
+    const listY = py + 102;
+    const rowH = 42;
     for (let i = 0; i < items.length; i++) {
         const ry = listY + i * rowH;
         const selected = (i === cursor);
         if (selected) {
-            Draw.rect(px + 20, ry - 4, panelW - 40, 30, COL_SEL_BG);
-            Draw.rect(px + 20, ry - 4, 5, 30, COL_SEL_BAR);
+            Draw.rect(px + 18, ry - 4, panelW - 36, 34, COL_SEL_BG);
+            Draw.rect(px + 18, ry - 4, 6, 34, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(selected ? 0.64 : 0.56);
+        fnt.scale = Math.fround(selected ? 0.80 : 0.72);
         fnt.color = selected ? COL_GOLD : COL_WHITE;
         if (selected) {
-            fnt.print(px + 34, ry + 1, ">");
-            fnt.print(px + 54, ry + 1, items[i]);
+            fnt.print(px + 32, ry + 2, ">");
+            fnt.print(px + 54, ry + 2, items[i]);
         } else {
-            fnt.print(px + 48, ry + 1, items[i]);
+            fnt.print(px + 48, ry + 2, items[i]);
         }
     }
 
     // Pie de navegación
-    const footY = py + panelH - 36;
-    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.44);
-    fnt.color = COL_MUTED;
-    fnt.print(px + 20, footY, "[ARRIBA/ABAJO] Elegir   [IZQ/DER] Dificultad   [X/START] Aceptar");
+    const footY = py + panelH - 38;
+    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.62);
+    fnt.color = COL_WHITE;
+    fnt.print(px + 18, footY, "[D-PAD] ELEGIR   [X/START] ACEPTAR");
 }
 
 function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
@@ -1642,44 +1681,48 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
 
     drawPanel(px, py, panelW, panelH, "OPCIONES DE SISTEMA Y VIDEO PS2", fnt);
 
+    const volIdx = ((GAME_SETTINGS.audioVolume / 25) | 0);
+    const volLabel = (volIdx >= 0 && volIdx < VOL_LABELS.length) ? VOL_LABELS[volIdx] : "0%";
+    const audioVal = (GAME_SETTINGS.audioVolume === 0) ? "APAGADO (0%)" : (isAudioReady() ? volLabel : "NO DISPONIBLE");
     const rows = [
-        { label: "CALIDAD 3D (RAYOS)",   val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
-        { label: "MARGEN TV CRT",        val: GAME_SETTINGS.crtSafe ? "SEGURO (CRT)" : "COMPLETO (HD)" },
-        { label: "SENSIBILIDAD CAMARA",  val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
-        { label: "VIBRACION DUALSHOCK2", val: GAME_SETTINGS.rumble ? "ACTIVADA" : "DESACTIVADA" },
-        { label: "EFECTOS VHS / POLVO",  val: GAME_SETTINGS.overlays ? "ACTIVADOS" : "DESACTIVADOS" },
-        { label: "AUDIO AMBIENTE",       val: isAudioReady() ? (GAME_SETTINGS.audioVolume + "%") : "NO DISPONIBLE" },
-        { label: "CONTADOR DE FPS",      val: GAME_SETTINGS.showFps ? "VISIBLE" : "OCULTO" },
-        { label: "GUARDAR Y VOLVER",     val: "[X]" }
+        { label: "CALIDAD 3D",     val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
+        { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
+        { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
+        { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
+        { label: "VIBRACION",      val: GAME_SETTINGS.rumble ? "SI" : "NO" },
+        { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
+        { label: "AUDIO",          val: audioVal },
+        { label: "MOSTRAR FPS",    val: GAME_SETTINGS.showFps ? "SI" : "NO" },
+        { label: "GUARDAR",        val: "[X]" }
     ];
 
     const startY = py + 44;
-    const rowH = 34;
+    const rowH = 33;
     for (let i = 0; i < rows.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 14, ry - 3, panelW - 28, 28, COL_SEL_BG);
-            Draw.rect(px + 14, ry - 3, 4, 28, COL_SEL_BAR);
+            Draw.rect(px + 14, ry - 3, panelW - 28, 30, COL_SEL_BG);
+            Draw.rect(px + 14, ry - 3, 5, 30, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.52);
+        fnt.scale = Math.fround(0.68);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
-        fnt.print(px + 26, ry + 2, rows[i].label);
+        fnt.print(px + 24, ry + 1, rows[i].label);
 
-        fnt.color = sel ? COL_CYAN : COL_MUTED;
+        fnt.color = sel ? COL_CYAN : COL_WHITE;
         const valText = (i < rows.length - 1) ? ["< ", String(rows[i].val), " >"].join("") : String(rows[i].val);
-        fnt.print(px + panelW - 215, ry + 2, valText);
+        fnt.print(px + panelW - 235, ry + 1, valText);
     }
 
-    const footY = py + panelH - 34;
-    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.44);
+    const footY = py + panelH - 36;
+    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.60);
     if (saveFeedbackTimer > 0) {
         fnt.color = COL_GREEN;
-        fnt.print(px + 18, footY, "Ajustes aplicados (guardados en Memory Card si esta disponible).");
+        fnt.print(px + 18, footY, "AJUSTES GUARDADOS");
     } else {
-        fnt.color = COL_MUTED;
-        fnt.print(px + 18, footY, "[IZQ/DER] Cambiar valor   [X] Aceptar   [CIRCULO] Volver");
+        fnt.color = COL_WHITE;
+        fnt.print(px + 18, footY, "[IZQ/DER] CAMBIAR   [X] OK   [O] VOLVER");
     }
 }
 
@@ -1707,11 +1750,11 @@ function drawControlsMenu(screenW, screenH, fnt) {
     let y = py + 48;
     for (let i = 0; i < bindings.length; i++) {
         Draw.rect(px + 16, y - 3, panelW - 32, 26, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
-        fnt.scale = Math.fround(0.50);
+        fnt.scale = Math.fround(0.64);
         fnt.color = COL_GOLD;
-        fnt.print(px + 24, y + 1, bindings[i][0]);
+        fnt.print(px + 20, y + 1, bindings[i][0]);
         fnt.color = COL_WHITE;
-        fnt.print(px + 215, y + 1, bindings[i][1]);
+        fnt.print(px + 245, y + 1, bindings[i][1]);
         y += 32;
     }
 
@@ -1746,7 +1789,7 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
         const unlocked = !fromPause || collectedNotes[i];
         Draw.rect(tx, py + 42, tabW, 24, sel ? COL_SEL_BG : rgba(20, 18, 24, 110));
         if (sel) Draw.rect(tx, py + 64, tabW, 2, COL_SEL_BAR);
-        fnt.scale = Math.fround(0.45);
+        fnt.scale = Math.fround(0.62);
         fnt.color = sel ? COL_GOLD : (unlocked ? COL_WHITE : COL_MUTED);
         fnt.print(tx + 8, py + 47, unlocked ? LORE_TABS_OPEN[i] : LORE_TABS_LOCK[i]);
     }
@@ -1760,7 +1803,7 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
         fnt.color = COL_GOLD;
         fnt.print(px + 20, bodyY, note.code);
 
-        fnt.scale = Math.fround(0.49);
+        fnt.scale = Math.fround(0.64);
         fnt.color = COL_WHITE;
         for (let l = 0; l < note.lines.length; l++) {
             fnt.print(px + 20, bodyY + 34 + l * 26, note.lines[l]);
@@ -1808,10 +1851,10 @@ function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
     fnt.print(px + 22, py + 188, "TELEMETRIA DE CONSOLA:");
     fnt.scale = Math.fround(0.47);
     fnt.color = COL_CYAN;
-    fnt.print(px + 22, py + 216, "Modo de video: " + screenW + "x" + screenH + " (" + modeInfo.vmodeLabel + ")");
-    fnt.print(px + 22, py + 240, "Audio PS2 (audsrv): " + (isAudioReady() ? "ACTIVO (ambient.wav)" : "INACTIVO"));
-    fnt.print(px + 22, py + 264, "Memory Card (mc0):  " + (RECORDS.mcAvailable ? "DISPONIBLE" : "NO DETECTADA"));
-    fnt.print(px + 22, py + 288, "Escapes totales: " + RECORDS.escapes);
+    fnt.print(px + 22, py + 216, ["Modo de video: ", String(screenW), "x", String(screenH), " (", modeInfo.vmodeLabel, ")"].join(""));
+    fnt.print(px + 22, py + 240, isAudioReady() ? "Audio PS2 (audsrv): ACTIVO (ambient.wav)" : "Audio PS2 (audsrv): INACTIVO");
+    fnt.print(px + 22, py + 264, RECORDS.mcAvailable ? "Memory Card (mc0):  DISPONIBLE" : "Memory Card (mc0):  NO DETECTADA");
+    fnt.print(px + 22, py + 288, ["Escapes totales: ", String(RECORDS.escapes)].join(""));
 
     const footY = py + panelH - 32;
     Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
@@ -1824,12 +1867,12 @@ function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
     const { sx, sy } = getSafeMargins();
     Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 6, 98));
 
-    const panelW = Math.min(430, screenW - sx * 2);
-    const panelH = 290;
+    const panelW = Math.min(480, screenW - sx * 2);
+    const panelH = 326;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
-    drawPanel(px, py, panelW, panelH, "PAUSA - SUBSUELO 04", fnt);
+    drawPanel(px, py, panelW, panelH, "PAUSA", fnt);
 
     const items = [
         "CONTINUAR PARTIDA",
@@ -1840,28 +1883,28 @@ function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
         "VOLVER AL MENU PRINCIPAL"
     ];
 
-    const startY = py + 46;
-    const rowH = 34;
+    const startY = py + 50;
+    const rowH = 38;
     for (let i = 0; i < items.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 16, ry - 3, panelW - 32, 28, COL_SEL_BG);
-            Draw.rect(px + 16, ry - 3, 4, 28, COL_SEL_BAR);
+            Draw.rect(px + 16, ry - 3, panelW - 32, 32, COL_SEL_BG);
+            Draw.rect(px + 16, ry - 3, 5, 32, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.54);
+        fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         if (sel) {
-            fnt.print(px + 28, ry + 1, ">");
-            fnt.print(px + 48, ry + 1, items[i]);
+            fnt.print(px + 26, ry + 2, ">");
+            fnt.print(px + 48, ry + 2, items[i]);
         } else {
-            fnt.print(px + 42, ry + 1, items[i]);
+            fnt.print(px + 44, ry + 2, items[i]);
         }
     }
 
-    fnt.scale = Math.fround(0.42);
-    fnt.color = COL_MUTED;
-    fnt.print(px + 18, py + panelH - 24, "[X] Seleccionar   [START/CIRCULO] Continuar");
+    fnt.scale = Math.fround(0.60);
+    fnt.color = COL_WHITE;
+    fnt.print(px + 18, py + panelH - 30, "[X] ELEGIR   [O/START] SEGUIR");
 }
 
 function drawNoteOverlay(screenW, screenH, noteIdx, fnt) {
@@ -1876,7 +1919,7 @@ function drawNoteOverlay(screenW, screenH, noteIdx, fnt) {
 
     drawPanel(px, py, panelW, panelH, note.code, fnt, rgba(160, 175, 200, 120));
 
-    fnt.scale = Math.fround(0.49);
+    fnt.scale = Math.fround(0.66);
     fnt.color = COL_WHITE;
     for (let l = 0; l < note.lines.length; l++) {
         fnt.print(px + 18, py + 46 + l * 28, note.lines[l]);
@@ -1913,13 +1956,13 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
 
         fnt.scale = Math.fround(0.52);
         fnt.color = COL_WHITE;
-        fnt.print(px + 20, py + 88,  "Tiempo de escape: " + formatTime(secs) + " (" + secs + "s)");
-        fnt.print(px + 20, py + 114, "Dificultad:       " + DIFF_LABELS[difficulty]);
-        fnt.print(px + 20, py + 140, "Registros:        " + notesFound + "/4");
+        fnt.print(px + 20, py + 88,  ["Tiempo de escape: ", formatTime(secs), " (", String(secs), "s)"].join(""));
+        fnt.print(px + 20, py + 114, ["Dificultad:       ", DIFF_LABELS[difficulty] || "NORMAL"].join(""));
+        fnt.print(px + 20, py + 140, ["Registros:        ", String(notesFound), "/4"].join(""));
 
         fnt.scale = Math.fround(1.1);
         fnt.color = COL_GOLD;
-        fnt.print(px + panelW - 115, py + 92, "RANGO " + rank);
+        fnt.print(px + panelW - 115, py + 92, ["RANGO ", rank].join(""));
     } else {
         fnt.scale = Math.fround(0.72);
         fnt.color = COL_TITLE_RED;
@@ -1927,7 +1970,7 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
 
         fnt.scale = Math.fround(0.50);
         fnt.color = COL_WHITE;
-        fnt.print(px + 20, py + 96,  "Tiempo sobrevivido: " + formatTime(secs));
+        fnt.print(px + 20, py + 96,  ["Tiempo sobrevivido: ", formatTime(secs)].join(""));
         fnt.color = COL_CYAN;
         fnt.print(px + 20, py + 128, "Consejo: Apaga la linterna [TRIANGULO] para ocultarte");
         fnt.print(px + 20, py + 152, "o enfoca directamente sus ojos para frenarlo.");
@@ -1942,7 +1985,7 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
             Draw.rect(px + 20, ry - 3, panelW - 40, 28, isWin ? rgba(20, 88, 42, 118) : COL_SEL_BG);
             Draw.rect(px + 20, ry - 3, 4, 28, isWin ? COL_GREEN : COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.54);
+        fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         if (sel) {
             fnt.print(px + 30, ry + 1, ">");
@@ -2032,7 +2075,7 @@ let popupText = "";
 let popupTimer = 0;
 let radioText = "";
 let radioTimer = 0;
-let currentFov = toF64(1.05);
+let currentFov = toF64(0.90);
 let flashlightWarmup = toF64(1.0);
 let exhausted = false;
 let bumpCooldown = 0;
@@ -2072,18 +2115,15 @@ let entities = [];
 
 let lastRumbleBig = 0;
 let lastRumbleSmall = 0;
+let lastRumbleTick = 0;
 function triggerRumble(big, small) {
     if (!GAME_SETTINGS.rumble) {
         big = 0;
         small = 0;
     }
     if (big === lastRumbleBig && small === lastRumbleSmall) return;
-    // En PS2 real nunca llamar Pads.rumble/padSetActDirect antes de estabilizar SIO2 (frameTick >= 30 y PAD_STATE_STABLE == 6)
-    if (frameTick < 30) {
-        lastRumbleBig = 0;
-        lastRumbleSmall = 0;
-        return;
-    }
+    // En PS2 real nunca llamar Pads.rumble/padSetActDirect antes de estabilizar SIO2 ni saturar el bus
+    if (frameTick < 30 || (frameTick - lastRumbleTick) < 15) return;
     try {
         if (typeof Pads.getState === "function") {
             const st = Pads.getState(0);
@@ -2092,6 +2132,7 @@ function triggerRumble(big, small) {
         if (typeof Pads.rumble === "function") {
             lastRumbleBig = big;
             lastRumbleSmall = small;
+            lastRumbleTick = frameTick;
             Pads.rumble(0, big, small);
         }
     } catch (_) {}
@@ -2133,14 +2174,14 @@ function switchState(nextState) {
 function getCompassLabel(ang) {
     let deg = ((toF64(ang) * 57.2957795) % 360.0);
     if ((deg - 0.0) < 0) deg = fadd(deg, 360.0);
-    if ((deg - 22.5) < 0 || (deg - 337.5) >= 0) return "E";
-    if ((deg - 67.5) < 0) return "SE";
-    if ((deg - 112.5) < 0) return "S";
-    if ((deg - 157.5) < 0) return "SO";
-    if ((deg - 202.5) < 0) return "O";
-    if ((deg - 247.5) < 0) return "NO";
-    if ((deg - 292.5) < 0) return "N";
-    return "NE";
+    if ((deg - 22.5) < 0 || (deg - 337.5) >= 0) return "[E]";
+    if ((deg - 67.5) < 0) return "[SE]";
+    if ((deg - 112.5) < 0) return "[S]";
+    if ((deg - 157.5) < 0) return "[SO]";
+    if ((deg - 202.5) < 0) return "[O]";
+    if ((deg - 247.5) < 0) return "[NO]";
+    if ((deg - 292.5) < 0) return "[N]";
+    return "[NE]";
 }
 
 function isPadDisconnected() {
@@ -2182,7 +2223,7 @@ function resetGame() {
     elapsedMs = 0;
     mapOpen = false;
     mapAnim = toF64(0.0);
-    currentFov = toF64(1.05);
+    currentFov = toF64(0.90);
     flashlightWarmup = toF64(0.25);
     exhausted = false;
     bumpCooldown = 0;
@@ -2283,8 +2324,8 @@ Screen.display(() => {
         }
 
         if (gameState === STATE_TITLE) {
-            player.ang = toF64(frameTick * 0.005);
-            render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.22, frameTick, false, 1.05, 1.0, 1.0, 0.0);
+            player.ang = toF64(frameTick * 0.002);
+            render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.22, frameTick, false, 0.90, 1.0, 1.0, 0.0);
             drawTitleMenu(SCREEN_W, SCREEN_H, titleCursor, frameTick, fnt);
 
             const nav = readMenuDir();
@@ -2319,34 +2360,36 @@ Screen.display(() => {
             drawOptionsMenu(SCREEN_W, SCREEN_H, optionsCursor, saveFeedbackTimer, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) optionsCursor = (optionsCursor + nav.dy + 8) % 8;
+            if (nav.dy !== 0) optionsCursor = (optionsCursor + nav.dy + 9) % 9;
 
-            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 7 ? 1 : 0);
+            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 8 ? 1 : 0);
             if (adjust !== 0) {
                 if (optionsCursor === 0) {
                     GAME_SETTINGS.qualityIndex = (GAME_SETTINGS.qualityIndex + adjust + 3) % 3;
                 } else if (optionsCursor === 1) {
-                    GAME_SETTINGS.crtSafe = !GAME_SETTINGS.crtSafe;
+                    GAME_SETTINGS.aspect16x9 = !GAME_SETTINGS.aspect16x9;
                 } else if (optionsCursor === 2) {
-                    GAME_SETTINGS.sensitivityIndex = (GAME_SETTINGS.sensitivityIndex + adjust + 3) % 3;
+                    GAME_SETTINGS.crtSafe = !GAME_SETTINGS.crtSafe;
                 } else if (optionsCursor === 3) {
+                    GAME_SETTINGS.sensitivityIndex = (GAME_SETTINGS.sensitivityIndex + adjust + 3) % 3;
+                } else if (optionsCursor === 4) {
                     GAME_SETTINGS.rumble = !GAME_SETTINGS.rumble;
                     if (!GAME_SETTINGS.rumble) triggerRumble(0, 0);
-                } else if (optionsCursor === 4) {
-                    GAME_SETTINGS.overlays = !GAME_SETTINGS.overlays;
                 } else if (optionsCursor === 5) {
+                    GAME_SETTINGS.overlays = !GAME_SETTINGS.overlays;
+                } else if (optionsCursor === 6) {
                     GAME_SETTINGS.audioVolume = (GAME_SETTINGS.audioVolume + adjust * 25 + 125) % 125;
                     if (GAME_SETTINGS.audioVolume > 0 && !isAudioReady()) {
                         initAudio();
                     }
                     applyAudioVolume(GAME_SETTINGS.audioVolume);
-                } else if (optionsCursor === 6) {
+                } else if (optionsCursor === 7) {
                     GAME_SETTINGS.showFps = !GAME_SETTINGS.showFps;
                     if (GAME_SETTINGS.showFps) ensureFpsCounter();
                 }
             }
 
-            if (pad.justPressed(Pads.CROSS) && optionsCursor === 7) {
+            if (pad.justPressed(Pads.CROSS) && optionsCursor === 8) {
                 saveGameData();
                 saveFeedbackTimer = 90;
                 switchState(returnState);
@@ -2368,7 +2411,7 @@ Screen.display(() => {
                 switchState(returnState);
             }
         } else if (gameState === STATE_CREDITS) {
-            render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.10, frameTick, false, 1.05, 1.0, 1.0, 0.0);
+            render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.10, frameTick, false, 0.90, 1.0, 1.0, 0.0);
             drawCreditsMenu(SCREEN_W, SCREEN_H, MODE_INFO, fnt);
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.CIRCLE) || pad.justPressed(Pads.START)) {
                 switchState(returnState);
@@ -2438,8 +2481,8 @@ Screen.display(() => {
                 if (exhausted && ((player.stamina - 32.0) >= 0)) exhausted = false;
             }
 
-            const targetFov = isSprinting ? 1.15 : 1.05;
-            currentFov = fadd(currentFov, (targetFov - currentFov) * Math.min(1.0, 0.14 * dtScale));
+            // FOV constante para evitar mareo 3D al correr o frenar
+            currentFov = toF64(0.90);
 
             const speed = (isSprinting ? 0.082 : (mapOpen ? 0.032 : 0.048)) * dtScale;
             const dirX = toF64(Math.cos(player.ang));
@@ -2489,8 +2532,8 @@ Screen.display(() => {
                         stalker.baseSpeed = fadd(stalker.baseSpeed, 0.003);
                         triggerScreenFlash(255, 200, 50, 56);
                         triggerRumble(160, 1);
-                        showPopup("+1 FUSIBLE (" + fusesCollected + "/4)");
-                        showRadio("FUSIBLE RECOLECTADO (" + fusesCollected + "/4). El Acechador se agita...", 190);
+                        showPopup(FUSE_POPUP_LABELS[fusesCollected] || "+1 FUSIBLE");
+                        showRadio(FUSE_RADIO_LABELS[fusesCollected] || "FUSIBLE RECOLECTADO.", 190);
                     } else if (e.kind === "battery") {
                         player.battery = toF64(Math.min(100.0, fadd(player.battery, 45.0)));
                         triggerScreenFlash(50, 220, 255, 48);
@@ -2515,7 +2558,7 @@ Screen.display(() => {
                         }
                         activeNoteIdx = e.msgIdx;
                         triggerScreenFlash(220, 230, 255, 38);
-                        showRadio(LORE_NOTES[e.msgIdx].code + ": " + LORE_NOTES[e.msgIdx].summary, 220);
+                        showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
                         switchState(STATE_NOTE_VIEW);
                         return;
                     }
@@ -2543,6 +2586,7 @@ Screen.display(() => {
                 endCursor = 0;
                 gameState = STATE_JUMPSCARE;
                 triggerRumble(255, 1);
+                return;
             }
 
             render3DWorld(
@@ -2578,40 +2622,34 @@ Screen.display(() => {
             const { sx, sy } = getSafeMargins();
             const hudW = SCREEN_W - sx * 2;
             const topY = sy;
-            Draw.rect(sx, topY, hudW, 30, rgba(4, 6, 10, 114));
-            Draw.rect(sx, topY + 29, hudW, 1, rgba(60, 80, 95, 110));
+            Draw.rect(sx, topY, hudW, 38, rgba(4, 6, 10, 124));
+            Draw.rect(sx, topY + 37, hudW, 2, rgba(70, 95, 115, 120));
 
-            fnt.scale = Math.fround(0.46);
-            if ((frameTick % 40) < 25) {
-                Draw.rect(sx + 8, topY + 11, 7, 7, rgba(245, 40, 40, 128));
-                fnt.color = rgba(245, 50, 50, 128);
-                fnt.print(sx + 18, topY + 7, "REC");
-            }
-
-            fnt.color = rgba(235, 235, 240, 128);
-            fnt.print(sx + 58, topY + 7, "FUS:" + fusesCollected + "/4");
+            fnt.scale = Math.fround(0.68);
+            fnt.color = rgba(245, 245, 250, 128);
+            fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
 
             fnt.color = rgba(250, 215, 95, 128);
-            fnt.print(sx + 132, topY + 7, "[" + getCompassLabel(player.ang) + "]");
+            fnt.print(sx + 114, topY + 8, getCompassLabel(player.ang));
 
             fnt.color = rgba(235, 235, 240, 128);
-            fnt.print(sx + 178, topY + 7, "LUZ:");
-            Draw.rect(sx + 216, topY + 9, 52, 11, rgba(20, 30, 38, 128));
-            const batFill = Math.max(0, (player.battery * 0.48) | 0);
+            fnt.print(sx + 174, topY + 8, "LUZ");
+            Draw.rect(sx + 224, topY + 12, 56, 14, rgba(20, 30, 38, 128));
+            const batFill = Math.max(0, (player.battery * 0.52) | 0);
             const batCol = ((player.battery - 25.0) < 0) ? rgba(255, 80, 45, 128) : rgba(55, 225, 255, 128);
-            if (batFill > 0) Draw.rect(sx + 218, topY + 11, batFill, 7, batCol);
+            if (batFill > 0) Draw.rect(sx + 226, topY + 14, batFill, 10, batCol);
 
             fnt.color = exhausted ? rgba(255, 95, 95, 128) : rgba(235, 235, 240, 128);
-            fnt.print(sx + 278, topY + 7, "STM:");
-            Draw.rect(sx + 318, topY + 9, 52, 11, rgba(25, 25, 32, 128));
-            const stamFill = Math.max(0, (player.stamina * 0.48) | 0);
+            fnt.print(sx + 290, topY + 8, "STM");
+            Draw.rect(sx + 342, topY + 12, 56, 14, rgba(25, 25, 32, 128));
+            const stamFill = Math.max(0, (player.stamina * 0.52) | 0);
             const stamCol = exhausted ? rgba(255, 65, 65, 128) : rgba(95, 240, 135, 128);
-            if (stamFill > 0) Draw.rect(sx + 320, topY + 11, stamFill, 7, stamCol);
+            if (stamFill > 0) Draw.rect(sx + 344, topY + 14, stamFill, 10, stamCol);
 
             const bpm = (fadd(72.0, dangerRatio * 118.0)) | 0;
             const ecgCol = ((dangerRatio - 0.45) > 0) ? rgba(255, 65, 65, 128) : rgba(90, 245, 130, 128);
             fnt.color = ecgCol;
-            fnt.print(sx + 380, topY + 7, "BPM:" + bpm);
+            fnt.print(sx + 408, topY + 8, ["BPM:", String(bpm)].join(""));
 
             const ecgBaseX = sx + hudW - 106;
             const ecgW = 96;
@@ -2641,36 +2679,36 @@ Screen.display(() => {
                         " R:" + renderStats.numRays + " DT:" + dtScale.toFixed(2) + " FPS:" + fps + " M:" + debugMode);
                 } else {
                     Draw.rect(sx + hudW - 76, topY + 33, 76, 18, rgba(0, 0, 0, 100));
-                    fnt.scale = Math.fround(0.43);
+                    fnt.scale = Math.fround(0.66);
                     fnt.color = fps >= 50 ? rgba(110, 255, 130, 128) : rgba(255, 210, 80, 128);
-                    fnt.print(sx + hudW - 70, topY + 35, "FPS: " + fps);
+                    fnt.print(sx + hudW - 70, topY + 35, ["FPS: ", String(fps)].join(""));
                 }
             }
 
             if (popupTimer > 0) {
                 popupTimer--;
-                fnt.scale = Math.fround(0.64);
+                fnt.scale = Math.fround(0.85);
                 fnt.color = rgba(255, 245, 140, 128);
-                fnt.print((SCREEN_W >> 1) - 110, topY + 54, popupText);
+                fnt.print((SCREEN_W >> 1) - 140, topY + 54, popupText);
             }
 
-            const botY = SCREEN_H - sy - 30;
-            Draw.rect(sx, botY, hudW, 30, rgba(4, 6, 10, 114));
-            Draw.rect(sx, botY, hudW, 1, rgba(60, 80, 95, 110));
-            fnt.scale = Math.fround(0.46);
+            const botY = SCREEN_H - sy - 38;
+            Draw.rect(sx, botY, hudW, 38, rgba(4, 6, 10, 124));
+            Draw.rect(sx, botY, hudW, 2, rgba(70, 95, 115, 120));
+            fnt.scale = Math.fround(0.66);
             if (radioTimer > 0) {
                 radioTimer--;
                 fnt.color = rgba(255, 230, 120, 128);
-                fnt.print(sx + 10, botY + 7, radioText);
+                fnt.print(sx + 10, botY + 8, radioText);
             } else if (fusesCollected === 4) {
                 fnt.color = rgba(100, 255, 130, 128);
-                fnt.print(sx + 10, botY + 7, "SALIDA NORTE ABIERTA! Ve hacia el Norte [N]. [SELECT/L2: Plano]");
+                fnt.print(sx + 10, botY + 8, "SALIDA NORTE ABIERTA! [SELECT: MAPA]");
             } else if (!breakerActive) {
-                fnt.color = rgba(210, 195, 145, 128);
-                fnt.print(sx + 10, botY + 7, "Busca el Disyuntor rojo al centro para abrir rejas. [SELECT/L2: Plano]");
+                fnt.color = rgba(235, 220, 165, 128);
+                fnt.print(sx + 10, botY + 8, "ACTIVA EL DISYUNTOR ROJO [SELECT: MAPA]");
             } else {
-                fnt.color = rgba(210, 195, 145, 128);
-                fnt.print(sx + 10, botY + 7, "Rejas abiertas. Junta los 4 fusibles (" + fusesCollected + "/4). [SELECT/L2: Plano]");
+                fnt.color = rgba(235, 220, 165, 128);
+                fnt.print(sx + 10, botY + 8, BREAKER_HUD_LABELS[fusesCollected] || BREAKER_HUD_LABELS[0]);
             }
 
             if (introFade > 0) {
@@ -2713,26 +2751,25 @@ Screen.display(() => {
             jumpscareTimer--;
             const flash = (jumpscareTimer & 3) < 2;
             Draw.rect(0, 0, SCREEN_W, SCREEN_H, flash ? rgba(165, 8, 12, 128) : rgba(10, 0, 2, 128));
-            const jx = ((Math.random() - 0.5) * 32) | 0;
-            const jy = ((Math.random() - 0.5) * 32) | 0;
-            Draw.rect(155 + jx, 35 + jy, 330, 390, rgba(18, 4, 6, 128));
-            Draw.quad(
-                200 + jx, 50 + jy, 440 + jx, 50 + jy,
-                220 + jx, 260 + jy, 420 + jx, 260 + jy,
-                rgba(205, 170, 162, 128), rgba(205, 170, 162, 128),
-                rgba(110, 65, 65, 128), rgba(110, 65, 65, 128)
-            );
-            Draw.rect(232 + jx, 112 + jy, 64, 46, rgba(12, 0, 2, 128));
-            Draw.rect(344 + jx, 112 + jy, 64, 46, rgba(12, 0, 2, 128));
-            Draw.rect(252 + jx, 123 + jy, 24, 24, rgba(255, 25, 20, 128));
-            Draw.rect(364 + jx, 123 + jy, 24, 24, rgba(255, 25, 20, 128));
-            Draw.rect(258 + jx, 129 + jy, 12, 12, rgba(255, 235, 210, 128));
-            Draw.rect(370 + jx, 129 + jy, 12, 12, rgba(255, 235, 210, 128));
-            Draw.rect(245 + jx, 185 + jy, 150, 62, rgba(10, 0, 2, 128));
+            const jx = ((Math.random() - 0.5) * 24) | 0;
+            const jy = ((Math.random() - 0.5) * 24) | 0;
+            const cx = (SCREEN_W >> 1) + jx;
+            const cy = (SCREEN_H >> 1) + jy;
+            Draw.rect(cx - 160, Math.max(0, cy - 180), 320, 360, rgba(18, 4, 6, 128));
+            Draw.rect(cx - 120, Math.max(0, cy - 165), 240, 110, rgba(205, 170, 162, 128));
+            Draw.rect(cx - 105, Math.max(0, cy - 55), 210, 115, rgba(125, 78, 76, 128));
+            Draw.rect(cx - 88, cy - 108, 64, 46, rgba(12, 0, 2, 128));
+            Draw.rect(cx + 24, cy - 108, 64, 46, rgba(12, 0, 2, 128));
+            Draw.rect(cx - 68, cy - 97, 24, 24, rgba(255, 25, 20, 128));
+            Draw.rect(cx + 44, cy - 97, 24, 24, rgba(255, 25, 20, 128));
+            Draw.rect(cx - 62, cy - 91, 12, 12, rgba(255, 235, 210, 128));
+            Draw.rect(cx + 50, cy - 91, 12, 12, rgba(255, 235, 210, 128));
+            Draw.rect(cx - 75, cy - 32, 150, 64, rgba(10, 0, 2, 128));
+            const toothCol = rgba(225, 205, 195, 128);
             for (let t = 0; t < 6; t++) {
-                const tx = 252 + jx + t * 24;
-                Draw.triangle(tx, 185 + jy, tx + 16, 185 + jy, tx + 8, 206 + jy, rgba(225, 205, 195, 128));
-                Draw.triangle(tx, 247 + jy, tx + 16, 247 + jy, tx + 8, 226 + jy, rgba(225, 205, 195, 128));
+                const tx = cx - 68 + t * 24;
+                Draw.rect(tx, cy - 32, 14, 20, toothCol);
+                Draw.rect(tx, cy + 12, 14, 20, toothCol);
             }
             if (jumpscareTimer <= 0) {
                 endCursor = 0;
