@@ -27,16 +27,16 @@ const GAME_SETTINGS = {
     bob: true,
     viewmodel: true,
     particles: true,
-    // Audio ambiental en 0% por defecto para arranque 100% seguro en PS2 real USB (activar desde Opciones)
-    audioVolume: 0,
+    // Audio activado por defecto (75%), iniciado tras estabilizar el arranque en frameTick === 15
+    audioVolume: 75,
     // Mostrar contador de FPS en esquina superior
     showFps: false,
     // Dificultad: 0 = NORMAL, 1 = PESADILLA
     difficulty: 0
 };
 
-const QUALITY_RAYS = [160, 128, 96];
-const QUALITY_LABELS = ["ALTA (160)", "EQUILIBRADA (128)", "RAPIDA (96)"];
+const QUALITY_RAYS = [128, 96, 64];
+const QUALITY_LABELS = ["ALTA (128)", "EQUILIBRADA (96)", "RAPIDA (64)"];
 const SENS_TURN_SPEED = [0.024, 0.034, 0.046];
 const SENS_LABELS = ["BAJA", "MEDIA", "ALTA"];
 const DIFF_LABELS = ["NORMAL", "PESADILLA"];
@@ -286,22 +286,8 @@ function initAudio() {
             }
         }
 
-        if (typeof Sound.Sfx === "function") {
-            const keys = Object.keys(SFX_PATHS);
-            for (let i = 0; i < keys.length; i++) {
-                const k = keys[i];
-                const p = SFX_PATHS[k];
-                if (fileExistsSafe(p)) {
-                    try {
-                        const sfx = new Sound.Sfx(p);
-                        if (sfx) {
-                            sfxBank[k] = sfx;
-                            sfxLoadedCount++;
-                        }
-                    } catch (_) {}
-                }
-            }
-        }
+        // Por ahora solo usamos ambient.ogg y chase.ogg (Sound.Stream);
+        // se evita sondear archivos .adp inexistentes por USB 1.1 en PS2
 
         if (ambientStream || chaseStream || sfxLoadedCount > 0) {
             audioReady = true;
@@ -325,9 +311,9 @@ function getActiveStream() {
     return ambientStream || chaseStream;
 }
 
-function setMusicTrack(trackName) {
+function setMusicTrack(trackName, rewindFirst = false) {
     const next = (trackName === "chase" && chaseStream) ? "chase" : "ambient";
-    if (next === activeTrack) return;
+    if (next === activeTrack && !rewindFirst) return;
     const prevStream = getActiveStream();
     activeTrack = next;
     if (!audioReady || GAME_SETTINGS.audioVolume <= 0) return;
@@ -337,9 +323,14 @@ function setMusicTrack(trackName) {
             audioPlaying = false;
         }
         const cur = getActiveStream();
-        if (cur && typeof cur.play === "function") {
-            cur.play();
-            audioPlaying = true;
+        if (cur) {
+            if (rewindFirst && typeof cur.rewind === "function") {
+                try { cur.rewind(); } catch (_) {}
+            }
+            if (typeof cur.play === "function") {
+                cur.play();
+                audioPlaying = true;
+            }
             if (typeof Sound.setVolume === "function") {
                 Sound.setVolume(GAME_SETTINGS.audioVolume | 0);
             }
@@ -523,6 +514,8 @@ const LORE_MESSAGES = LORE_NOTES.map(n => [n.code, ": ", n.summary].join(""));
 const AI_PATROL = 0;
 const AI_INVESTIGATE = 1;
 const AI_HUNT = 2;
+const AI_CHASE_INTRO = 3;
+const CHASE_INTRO_DURATION_MS = 7000.0;
 
 const WAYPOINTS = [
     { x: 10.0, y: 10.0 },
@@ -540,7 +533,7 @@ const bfsVisited = new Uint8Array(TOTAL_CELLS);
 const bfsQueue   = new Int16Array(TOTAL_CELLS);
 
 // Resultado reutilizable sin allocaciones por frame
-const aiResult = { distP: 99.0, los: false, blinded: false, sideBias: 0.0 };
+const aiResult = { distP: 99.0, los: false, blinded: false, sideBias: 0.0, chaseIntroStarted: false, chaseHuntStarted: false, inChaseIntro: false };
 const bfsOutNode = { x: 10.0, y: 10.0 };
 
 function hasLineOfSight(grid, x0, y0, x1, y1) {
@@ -653,7 +646,7 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     return bfsOutNode;
 }
 
-function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0) {
+function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0, dtMs = 16.6667) {
     const px = toF64(player.x);
     const py = toF64(player.y);
     const sx = toF64(stalker.x);
@@ -674,21 +667,51 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
     const baseDetect = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
     const detectRange = baseDetect - (-rangeBonus);
 
-    if (los && (distP - detectRange) < 0) {
-        stalker.state = AI_HUNT;
+    aiResult.chaseIntroStarted = false;
+    aiResult.chaseHuntStarted = false;
+    const stepMs = toF64(dtMs);
+    const spotted = los && ((distP - detectRange) < 0);
+    const heardSprint = isSprinting && ((distP - (11.0 - (-rangeBonus))) < 0);
+    const closeSense = (distP - (isNightmare ? 7.5 : 6.2)) < 0;
+
+    if (stalker.state === AI_CHASE_INTRO) {
+        // Fase de alerta de 7 segundos sincronizada con la intro de chase.ogg
+        if (spotted || heardSprint || closeSense) {
+            stalker.targetX = px;
+            stalker.targetY = py;
+        }
+        stalker.chaseIntroMs = Math.max(0.0, toF64(stalker.chaseIntroMs) - stepMs);
+        stalker.alertTimer = isNightmare ? 260 : 210;
+        if ((stalker.chaseIntroMs - 0.0) <= 0) {
+            stalker.chaseIntroMs = 0.0;
+            stalker.state = AI_HUNT;
+            aiResult.chaseHuntStarted = true;
+        }
+    } else if (spotted || (closeSense && stalker.state !== AI_HUNT)) {
         stalker.targetX = px;
         stalker.targetY = py;
-        stalker.alertTimer = isNightmare ? 230 : 180;
-    } else if (isSprinting && (distP - (11.0 - (-rangeBonus))) < 0) {
-        if (stalker.state !== AI_HUNT) stalker.state = AI_INVESTIGATE;
+        if (stalker.state !== AI_HUNT) {
+            // Arranca la intro de 7s antes de pasar a persecución total
+            stalker.state = AI_CHASE_INTRO;
+            stalker.chaseIntroMs = toF64(CHASE_INTRO_DURATION_MS);
+            stalker.alertTimer = isNightmare ? 280 : 220;
+            aiResult.chaseIntroStarted = true;
+        } else {
+            stalker.alertTimer = isNightmare ? 250 : 200;
+        }
+    } else if (heardSprint) {
         stalker.targetX = px;
         stalker.targetY = py;
+        if (stalker.state === AI_PATROL) {
+            stalker.state = AI_INVESTIGATE;
+        }
         const minAlert = isNightmare ? 170 : 130;
         if (stalker.alertTimer < minAlert) stalker.alertTimer = minAlert;
     } else if (stalker.alertTimer > 0) {
         stalker.alertTimer = Math.max(0, stalker.alertTimer - dt);
         if (stalker.alertTimer <= 0) {
             stalker.alertTimer = 0;
+            stalker.chaseIntroMs = 0.0;
             stalker.state = AI_PATROL;
         }
     }
@@ -737,6 +760,7 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
 
     let speedMult = 0.72;
     if (stalker.state === AI_INVESTIGATE) speedMult = 0.92;
+    if (stalker.state === AI_CHASE_INTRO) speedMult = 0.42;
     if (stalker.state === AI_HUNT) speedMult = isNightmare ? 1.30 : 1.15;
     if (blinded) speedMult *= (isNightmare ? 0.42 : 0.28);
 
@@ -753,6 +777,7 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
     aiResult.los = los;
     aiResult.blinded = blinded;
     aiResult.sideBias = sideBias;
+    aiResult.inChaseIntro = (stalker.state === AI_CHASE_INTRO);
     return aiResult;
 }
 
@@ -868,7 +893,7 @@ function render3DWorld(
     dangerRatio, frameTick, exitUnlocked, fov, flashIntensity,
     mapAnim = 0.0, sideBias = 0.0
 ) {
-    const qIdx = GAME_SETTINGS.qualityIndex;
+    const qIdx = (gameState === STATE_PLAY) ? GAME_SETTINGS.qualityIndex : 2;
     const qTable = QUALITY_TABLES[qIdx] || QUALITY_TABLES[1];
     const numRays = qTable.numRays;
     const CAM_X = qTable.camX;
@@ -2251,6 +2276,7 @@ const stalker = {
     targetX: toF64(10.0),
     targetY: toF64(10.0),
     alertTimer: 0,
+    chaseIntroMs: 0.0,
     wpIdx: 0,
     hasNextNode: false,
     nextNodeX: toF64(10.0),
@@ -2397,6 +2423,7 @@ function resetGame() {
     stalker.targetX = toF64(10.0);
     stalker.targetY = toF64(10.0);
     stalker.alertTimer = 0;
+    stalker.chaseIntroMs = 0.0;
     stalker.wpIdx = 0;
     stalker.hasNextNode = false;
 
@@ -2450,6 +2477,15 @@ Screen.display(() => {
 
         frameTick++;
         pad.update();
+
+        // Auto-inicializa el audio tras 15 frames estables si el volumen esta activado por defecto
+        if (frameTick === 15 && GAME_SETTINGS.audioVolume > 0 && !audioInitAttempted) {
+            initAudio();
+        }
+        // Cede 2ms al planificador cooperativo del EE para que el hilo de audio Vorbis/audsrv no se quede sin buffer
+        if (audioReady && audioPlaying && typeof os !== "undefined" && os && typeof os.sleep === "function") {
+            try { os.sleep(2); } catch (_) {}
+        }
 
         // Primer frame seguro: garantiza salida de video inmediata tras el logo de Athena en PS2 real
         if (frameTick === 1) {
@@ -2731,9 +2767,24 @@ Screen.display(() => {
                 return;
             }
 
-            const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty);
+            const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty, dtMs);
             const dangerRatio = toF64(Math.max(0.0, Math.min(1.0, (7.0 - toF64(ai.distP)) / 7.0)));
-            setMusicTrack(stalker.state === AI_HUNT ? "chase" : "ambient");
+
+            if (ai.chaseIntroStarted) {
+                setMusicTrack("chase", true);
+                showPopup("TE HA DETECTADO...", 120);
+                showRadio("ALGO SE ACERCA... PREPARATE PARA CORRER!", 260);
+                triggerScreenFlash(160, 20, 25, 36);
+            } else if (ai.chaseHuntStarted) {
+                setMusicTrack("chase", false);
+                showPopup("! TE PERSIGUE !", 95);
+                showRadio("EL ACECHADOR TE PERSIGUE! CORRE!", 190);
+                triggerScreenFlash(220, 18, 22, 56);
+            } else if (stalker.state === AI_CHASE_INTRO || stalker.state === AI_HUNT) {
+                setMusicTrack("chase", false);
+            } else {
+                setMusicTrack("ambient", false);
+            }
 
             const hbPeriod = Math.max(14, (42.0 - dangerRatio * 26.0) | 0);
             if (((dangerRatio - 0.28) > 0) && ((frameTick % hbPeriod) === 0)) {
@@ -2769,6 +2820,10 @@ Screen.display(() => {
                 if (exhausted) {
                     const exAlpha = (fadd(22.0, Math.abs(Math.sin(frameTick * 0.14)) * 28.0)) | 0;
                     Draw.rect(0, 0, SCREEN_W, SCREEN_H, rgba(10, 10, 24, exAlpha));
+                }
+                if (ai.inChaseIntro && ((frameTick & 31) < 16)) {
+                    Draw.rect(0, 0, SCREEN_W, 4, rgba(210, 35, 35, 72));
+                    Draw.rect(0, SCREEN_H - 4, SCREEN_W, 4, rgba(210, 35, 35, 72));
                 }
                 if ((dangerRatio - 0.15) > 0) {
                     const barY = (frameTick * 13) % (SCREEN_H - 18);
