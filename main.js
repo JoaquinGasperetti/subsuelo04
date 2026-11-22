@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // SUBSUELO 04: EL ACECHADOR (PS2 Real Hardware - Single-File Bundle)
 // Cero imports ES6: 100% compatible con OPL (DVD ISO cdfs:/ y APPS mass:),
 // wLaunchELF y PCSX2 sin problemas de rutas relativas ni mayusculas.
@@ -29,7 +29,7 @@ const GAME_SETTINGS = {
     particles: true,
     // Audio activado por defecto (75%), iniciado tras estabilizar el arranque en frameTick === 15
     audioVolume: 75,
-    // Mostrar contador de FPS en esquina superior
+// Mostrar panel de diagnostico de rendimiento
     showFps: false,
     // Dificultad: 0 = NORMAL, 1 = PESADILLA
     difficulty: 0
@@ -68,13 +68,111 @@ function rgba(r, g, b, a) {
     return ((r & 255) | ((g & 255) << 8) | ((b & 255) << 16) | ((a & 255) << 24)) >>> 0;
 }
 
-// Dispara el recolector de ciclos de QuickJS SOLO en transiciones de menú (nunca durante gameplay)
-function requestGC() {
+// Muestreo pausado para no consultar las APIs nativas en cada cuadro.
+const consoleStats = {
+    lastSample: -30,
+    fps: 0,
+    cpuMHz: 0,
+    ramUsed: 0,
+    ramTotal: 0,
+    vramUsed: 0,
+    vramTotal: 0,
+    drawCalls: 0,
+    triangles: 0,
+    gpuText: "GS: --"
+};
+
+function formatMemoryMB(bytes) {
+    if (!(bytes > 0)) return "--";
+    return String(Math.round(bytes / 1048576));
+}
+
+function restore2DRenderState(screenW, screenH) {
+    if (typeof Screen === "undefined" || typeof Screen.setParam !== "function") return;
+    try { if (typeof Screen.DEPTH_TEST_ENABLE !== "undefined") Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {}
+    try { if (typeof Screen.ALPHA_TEST_ENABLE !== "undefined") Screen.setParam(Screen.ALPHA_TEST_ENABLE, false); } catch (_) {}
+    try { if (typeof Screen.DST_ALPHA_TEST_ENABLE !== "undefined") Screen.setParam(Screen.DST_ALPHA_TEST_ENABLE, false); } catch (_) {}
     try {
-        if (typeof std !== "undefined" && std && typeof std.gc === "function") {
-            std.gc();
+        if (typeof Screen.SCISSOR_BOUNDS !== "undefined") {
+            Screen.setParam(Screen.SCISSOR_BOUNDS, { x1: 0, y1: 0, x2: screenW - 1, y2: screenH - 1 });
         }
     } catch (_) {}
+}
+function updateConsoleStats(frameTick) {
+    if (frameTick - consoleStats.lastSample < 30) return;
+    consoleStats.lastSample = frameTick;
+
+    try {
+        if (typeof Screen !== "undefined" && typeof Screen.getFPS === "function") {
+            consoleStats.fps = Screen.getFPS(1000) | 0;
+        }
+    } catch (_) {}
+
+    try {
+        if (typeof System !== "undefined" && typeof System.getCPUInfo === "function") {
+            const cpu = System.getCPUInfo();
+            if (cpu) {
+                if (cpu.CPUClock > 0) consoleStats.cpuMHz = Math.round(cpu.CPUClock / 1000000);
+                if (cpu.RAMSize > 0) consoleStats.ramTotal = cpu.RAMSize;
+            }
+        }
+    } catch (_) {}
+
+    try {
+        if (typeof System !== "undefined" && typeof System.getMemoryStats === "function") {
+            const memory = System.getMemoryStats();
+            if (memory && memory.used >= 0) consoleStats.ramUsed = memory.used;
+        }
+    } catch (_) {}
+
+    try {
+        if (typeof Screen !== "undefined" && typeof Screen.getMemoryStats === "function") {
+            if (typeof Screen.VRAM_USED_TOTAL !== "undefined") consoleStats.vramUsed = Screen.getMemoryStats(Screen.VRAM_USED_TOTAL) | 0;
+            if (typeof Screen.VRAM_SIZE !== "undefined") consoleStats.vramTotal = Screen.getMemoryStats(Screen.VRAM_SIZE) | 0;
+        } else if (typeof Screen !== "undefined" && typeof Screen.getFreeVRAM === "function") {
+            // Compatibilidad con runtimes antiguos: esta API informa el uso en AthenaEnv.
+            consoleStats.vramUsed = Screen.getFreeVRAM() | 0;
+        }
+    } catch (_) {}
+
+    try {
+        if (typeof Render !== "undefined" && typeof Render.stats === "function") {
+            const render = Render.stats();
+            if (render) {
+                if (render.drawCalls >= 0) consoleStats.drawCalls = render.drawCalls | 0;
+                if (render.triangles >= 0) consoleStats.triangles = render.triangles | 0;
+            }
+        }
+    } catch (_) {}
+
+    try {
+        if (typeof System !== "undefined" && typeof System.getGPUInfo === "function") {
+            const gpu = System.getGPUInfo();
+            if (gpu) consoleStats.gpuText = "GS " + (gpu.id || "?") + "." + (gpu.revision || "?");
+        }
+    } catch (_) {}
+}
+
+function drawConsoleStatsOverlay(screenW, screenH, frameTick, fnt) {
+    updateConsoleStats(frameTick);
+    const boxW = 205;
+    const boxH = 112;
+    const x = screenW - boxW - 8;
+    const y = 8;
+    Draw.rect(x, y, boxW, boxH, rgba(0, 0, 0, 168));
+    Draw.rect(x, y, boxW, 2, rgba(80, 210, 230, 180));
+    fnt.scale = Math.fround(0.56);
+    fnt.color = rgba(130, 235, 245, 128);
+    fnt.print(x + 7, y + 5, "DIAGNOSTICO PS2  " + consoleStats.gpuText);
+    fnt.color = COL_WHITE;
+    fnt.print(x + 7, y + 22, "FPS " + consoleStats.fps + "   CPU " + (consoleStats.cpuMHz || "--") + " MHz");
+    fnt.print(x + 7, y + 39, "EE RAM " + formatMemoryMB(consoleStats.ramUsed) + "/" + formatMemoryMB(consoleStats.ramTotal) + " MB*");
+    const vramUsedKB = consoleStats.vramUsed > 0 ? Math.round(consoleStats.vramUsed / 1024) : 0;
+    const vramTotalKB = consoleStats.vramTotal > 0 ? Math.round(consoleStats.vramTotal / 1024) : 4096;
+    fnt.print(x + 7, y + 56, "GS VRAM " + (vramUsedKB || "--") + "/" + vramTotalKB + " KB");
+    fnt.print(x + 7, y + 73, "VU1 DRAWS " + consoleStats.drawCalls + "  TRI " + consoleStats.triangles);
+    fnt.color = rgba(220, 205, 165, 128);
+    fnt.print(x + 7, y + 91, "*RAM asignada; FPS promedio de 1s");
 }
 
 // --- MODULE: src/storage.js ---
@@ -1487,6 +1585,7 @@ function render3DWorld(
             screenW, screenH, player, stalker, entities,
             dangerRatio, frameTick, exitUnlocked, flashIntensity, mapAnim, sideBias
         );
+        restore2DRenderState(screenW, screenH);
         return;
     }
     const qIdx = (gameState === STATE_PLAY) ? GAME_SETTINGS.qualityIndex : 2;
@@ -2459,7 +2558,7 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         { label: "VIBRACION",      val: GAME_SETTINGS.rumble ? "SI" : "NO" },
         { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
         { label: "AUDIO",          val: audioVal },
-        { label: "MOSTRAR FPS",    val: GAME_SETTINGS.showFps ? "SI" : "NO" },
+        { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
         { label: "GUARDAR",        val: "[X]" }
     ];
 
@@ -3026,7 +3125,8 @@ function switchState(nextState) {
     if (nextState !== STATE_PLAY && nextState !== STATE_JUMPSCARE) {
         setMusicTrack("ambient");
         triggerRumble(0, 0);
-        requestGC();
+        // No forzar std.gc() al pausar: AthenaEnv puede invalidar recursos nativos
+        // retenidos por el renderer o la fuente durante esta transición.
     }
 }
 
@@ -3662,7 +3762,7 @@ Screen.display(() => {
                 prevEy = ey;
             }
 
-            if (GAME_SETTINGS.showFps || debugMode > 0) {
+            if (debugMode > 0) {
                 let fps = 0;
                 try { fps = Screen.getFPS(60) | 0; } catch (_) {}
                 if (debugMode > 0) {
@@ -3677,6 +3777,10 @@ Screen.display(() => {
                     fnt.color = fps >= 50 ? rgba(110, 255, 130, 128) : rgba(255, 210, 80, 128);
                     fnt.print(sx + hudW - 70, topY + 35, ["FPS: ", String(fps)].join(""));
                 }
+            }
+
+            if (GAME_SETTINGS.showFps) {
+                drawConsoleStatsOverlay(SCREEN_W, SCREEN_H, frameTick, fnt);
             }
 
             if (popupTimer > 0) {
