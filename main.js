@@ -259,10 +259,10 @@ function initAudio() {
 
         if (typeof Sound.Stream === "function") {
             const ambPath = resolveFirstExisting([
-                "assets/audio/ambient.ogg",
                 "assets/audio/ambient.wav",
-                "assets/ambient.ogg",
-                "assets/ambient.wav"
+                "assets/audio/ambient.ogg",
+                "assets/ambient.wav",
+                "assets/ambient.ogg"
             ]);
             if (ambPath) {
                 try {
@@ -273,8 +273,8 @@ function initAudio() {
                 }
             }
             const chasePath = resolveFirstExisting([
-                "assets/audio/chase.ogg",
-                "assets/audio/chase.wav"
+                "assets/audio/chase.wav",
+                "assets/audio/chase.ogg"
             ]);
             if (chasePath) {
                 try {
@@ -2023,7 +2023,7 @@ function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
     fnt.scale = Math.fround(0.47);
     fnt.color = COL_CYAN;
     fnt.print(px + 22, py + 216, ["Modo de video: ", String(screenW), "x", String(screenH), " (", modeInfo.vmodeLabel, ")"].join(""));
-    fnt.print(px + 22, py + 240, isAudioReady() ? "Audio PS2 (audsrv): ACTIVO (ambient.ogg)" : "Audio PS2 (audsrv): INACTIVO");
+    fnt.print(px + 22, py + 240, isAudioReady() ? "Audio PS2 (audsrv): ACTIVO (ambient.wav)" : "Audio PS2 (audsrv): INACTIVO");
     fnt.print(px + 22, py + 264, RECORDS.mcAvailable ? "Memory Card (mc0):  DISPONIBLE" : "Memory Card (mc0):  NO DETECTADA");
     fnt.print(px + 22, py + 288, ["Escapes totales: ", String(RECORDS.escapes)].join(""));
 
@@ -2484,7 +2484,7 @@ Screen.display(() => {
         }
         // Cede 2ms al planificador cooperativo del EE para que el hilo de audio Vorbis/audsrv no se quede sin buffer
         if (audioReady && audioPlaying && typeof os !== "undefined" && os && typeof os.sleep === "function") {
-            try { os.sleep(2); } catch (_) {}
+            try { os.sleep(3); } catch (_) {}
         }
 
         // Primer frame seguro: garantiza salida de video inmediata tras el logo de Athena en PS2 real
