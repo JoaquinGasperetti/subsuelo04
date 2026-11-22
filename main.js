@@ -188,16 +188,42 @@ function recordEscape(secs, difficulty) {
 
 // --- MODULE: src/audio.js ---
 // ============================================================================
-// Gestor de Audio Ambiental seguro para PS2 (AthenaEnv Sound / audsrv)
+// Gestor Completo de Audio PS2 (AthenaEnv V4 Sound.Stream + Sound.Sfx ADPCM)
+// - Música / Ambiente (OGG Vorbis 48kHz estéreo): assets/audio/ambient.ogg, chase.ogg
+// - Efectos cortos (PS2 SPU2 ADPCM .adp): assets/audio/*.adp (carga opcional segura)
 // ============================================================================
 
 let ambientStream = null;
+let chaseStream = null;
+let activeTrack = "ambient";
 let audioReady = false;
 let audioPlaying = false;
 let lastAppliedVol = -1;
-
 let audioInitAttempted = false;
 let iopAudioLoaded = false;
+
+const SFX_PATHS = {
+    step:        "assets/audio/step.adp",
+    flashlight:  "assets/audio/flashlight.adp",
+    pickup:      "assets/audio/pickup.adp",
+    breaker:     "assets/audio/breaker.adp",
+    gate_locked: "assets/audio/gate_locked.adp",
+    heartbeat:   "assets/audio/heartbeat.adp",
+    jumpscare:   "assets/audio/jumpscare.adp",
+    ui_move:     "assets/audio/ui_move.adp",
+    ui_select:   "assets/audio/ui_select.adp"
+};
+const sfxBank = {};
+let sfxLoadedCount = 0;
+
+function fileExistsSafe(path) {
+    try {
+        if (typeof std !== "undefined" && std && typeof std.exists === "function") {
+            return !!std.exists(path);
+        }
+    } catch (_) {}
+    return false;
+}
 
 function ensureAudioIOP() {
     if (iopAudioLoaded) return;
@@ -216,64 +242,152 @@ function ensureAudioIOP() {
     } catch (_) {}
 }
 
-function resolveAudioPath() {
-    if (typeof std !== "undefined" && std && typeof std.exists === "function") {
-        if (std.exists("assets/ambient.ogg")) return "assets/ambient.ogg";
-        if (std.exists("assets/ambient.wav")) return "assets/ambient.wav";
-        return null;
+function resolveFirstExisting(paths) {
+    for (let i = 0; i < paths.length; i++) {
+        if (fileExistsSafe(paths[i])) return paths[i];
     }
-    return "assets/ambient.ogg";
+    return null;
 }
 
 function initAudio() {
-    if (audioReady && ambientStream) return true;
+    if (audioReady) return true;
     if (audioInitAttempted) return false;
     audioInitAttempted = true;
     try {
-        if (typeof Sound === "undefined" || !Sound || typeof Sound.Stream !== "function") return false;
-        const audioPath = resolveAudioPath();
-        if (!audioPath) return false;
+        if (typeof Sound === "undefined" || !Sound) return false;
         ensureAudioIOP();
-        ambientStream = new Sound.Stream(audioPath);
-        if (ambientStream) {
-            try { ambientStream.loop = true; } catch (_) {}
+
+        if (typeof Sound.Stream === "function") {
+            const ambPath = resolveFirstExisting([
+                "assets/audio/ambient.ogg",
+                "assets/audio/ambient.wav",
+                "assets/ambient.ogg",
+                "assets/ambient.wav"
+            ]);
+            if (ambPath) {
+                try {
+                    ambientStream = new Sound.Stream(ambPath);
+                    if (ambientStream) ambientStream.loop = true;
+                } catch (_) {
+                    ambientStream = null;
+                }
+            }
+            const chasePath = resolveFirstExisting([
+                "assets/audio/chase.ogg",
+                "assets/audio/chase.wav"
+            ]);
+            if (chasePath) {
+                try {
+                    chaseStream = new Sound.Stream(chasePath);
+                    if (chaseStream) chaseStream.loop = true;
+                } catch (_) {
+                    chaseStream = null;
+                }
+            }
+        }
+
+        if (typeof Sound.Sfx === "function") {
+            const keys = Object.keys(SFX_PATHS);
+            for (let i = 0; i < keys.length; i++) {
+                const k = keys[i];
+                const p = SFX_PATHS[k];
+                if (fileExistsSafe(p)) {
+                    try {
+                        const sfx = new Sound.Sfx(p);
+                        if (sfx) {
+                            sfxBank[k] = sfx;
+                            sfxLoadedCount++;
+                        }
+                    } catch (_) {}
+                }
+            }
+        }
+
+        if (ambientStream || chaseStream || sfxLoadedCount > 0) {
             audioReady = true;
             audioPlaying = false;
+            activeTrack = "ambient";
             lastAppliedVol = -1;
             applyAudioVolume(GAME_SETTINGS.audioVolume);
             return true;
         }
     } catch (_) {
         ambientStream = null;
+        chaseStream = null;
         audioReady = false;
         audioPlaying = false;
     }
     return false;
 }
 
+function getActiveStream() {
+    if (activeTrack === "chase" && chaseStream) return chaseStream;
+    return ambientStream || chaseStream;
+}
+
+function setMusicTrack(trackName) {
+    const next = (trackName === "chase" && chaseStream) ? "chase" : "ambient";
+    if (next === activeTrack) return;
+    const prevStream = getActiveStream();
+    activeTrack = next;
+    if (!audioReady || GAME_SETTINGS.audioVolume <= 0) return;
+    try {
+        if (prevStream && audioPlaying && typeof prevStream.pause === "function") {
+            prevStream.pause();
+            audioPlaying = false;
+        }
+        const cur = getActiveStream();
+        if (cur && typeof cur.play === "function") {
+            cur.play();
+            audioPlaying = true;
+            if (typeof Sound.setVolume === "function") {
+                Sound.setVolume(GAME_SETTINGS.audioVolume | 0);
+            }
+        }
+    } catch (_) {}
+}
+
 function applyAudioVolume(vol) {
     const clamped = vol < 0 ? 0 : (vol > 100 ? 100 : (vol | 0));
     if (clamped === lastAppliedVol) return;
     lastAppliedVol = clamped;
-    if (!audioReady || !ambientStream) return;
+    if (!audioReady) return;
+    const cur = getActiveStream();
     try {
         if (clamped === 0) {
-            if (audioPlaying && typeof ambientStream.pause === "function") {
-                ambientStream.pause();
+            if (cur && audioPlaying && typeof cur.pause === "function") {
+                cur.pause();
                 audioPlaying = false;
             }
             if (typeof Sound.setVolume === "function") {
                 Sound.setVolume(0);
             }
         } else {
-            if (!audioPlaying && typeof ambientStream.play === "function") {
-                ambientStream.play();
+            if (cur && !audioPlaying && typeof cur.play === "function") {
+                cur.play();
                 audioPlaying = true;
             }
             if (typeof Sound.setVolume === "function") {
                 Sound.setVolume(clamped);
             }
         }
+    } catch (_) {}
+}
+
+function playSfx(name, panVal = 0, volScale = 1.0) {
+    if (!audioReady || GAME_SETTINGS.audioVolume <= 0) return;
+    const sfx = sfxBank[name];
+    if (!sfx || typeof sfx.play !== "function") return;
+    try {
+        let v = (GAME_SETTINGS.audioVolume * volScale) | 0;
+        if (v < 1) v = 1;
+        if (v > 100) v = 100;
+        let p = panVal | 0;
+        if (p < -100) p = -100;
+        if (p > 100) p = 100;
+        sfx.volume = v;
+        sfx.pan = p;
+        sfx.play();
     } catch (_) {}
 }
 
@@ -2198,6 +2312,7 @@ function ensureFpsCounter() {
 function switchState(nextState) {
     gameState = nextState;
     if (nextState !== STATE_PLAY && nextState !== STATE_JUMPSCARE) {
+        setMusicTrack("ambient");
         triggerRumble(0, 0);
         requestGC();
     }
@@ -2361,11 +2476,12 @@ Screen.display(() => {
             drawTitleMenu(SCREEN_W, SCREEN_H, titleCursor, frameTick, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) titleCursor = (titleCursor + nav.dy + 5) % 5;
+            if (nav.dy !== 0) { titleCursor = (titleCursor + nav.dy + 5) % 5; playSfx("ui_move", 0, 0.7); }
             if (titleCursor === 0 && nav.dx !== 0) {
                 GAME_SETTINGS.difficulty = (GAME_SETTINGS.difficulty + 1) & 1;
             }
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.START)) {
+                playSfx("ui_select", 0, 0.85);
                 if (titleCursor === 0) {
                     resetGame();
                     switchState(STATE_PLAY);
@@ -2392,7 +2508,7 @@ Screen.display(() => {
             drawOptionsMenu(SCREEN_W, SCREEN_H, optionsCursor, saveFeedbackTimer, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) optionsCursor = (optionsCursor + nav.dy + 9) % 9;
+            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 9) % 9; playSfx("ui_move", 0, 0.7); }
 
             const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 8 ? 1 : 0);
             if (adjust !== 0) {
@@ -2473,6 +2589,7 @@ Screen.display(() => {
             if (pad.justPressed(Pads.TRIANGLE)) {
                 player.flashlightOn = !player.flashlightOn;
                 if (player.flashlightOn) flashlightWarmup = toF64(0.25);
+                playSfx("flashlight", 0, 0.85);
             }
 
             if (mapOpen) mapAnim = toF64(Math.min(1.0, fadd(mapAnim, 0.11 * dtScale)));
@@ -2538,13 +2655,19 @@ Screen.display(() => {
             if (bumpCooldown > 0) bumpCooldown--;
             if (bumpedGate && bumpCooldown === 0) {
                 bumpCooldown = 60;
+                playSfx("gate_locked", 0, 0.9);
                 triggerRumble(110, 1);
                 triggerScreenFlash(200, 60, 20, 42);
                 showRadio("REJA BLOQUEADA: Activa el Disyuntor rojo en el sector central.", 160);
             }
 
             if (isMoving) {
+                const prevStepCycle = (player.bobPhase / 3.14159) | 0;
                 player.bobPhase = fadd(player.bobPhase, (isSprinting ? 0.28 : 0.16) * dtScale);
+                const curStepCycle = (player.bobPhase / 3.14159) | 0;
+                if (curStepCycle !== prevStepCycle) {
+                    playSfx("step", (curStepCycle & 1) ? -18 : 18, isSprinting ? 0.85 : 0.55);
+                }
             }
 
             const batDrain = GAME_SETTINGS.difficulty === 1 ? 0.024 : 0.018;
@@ -2561,6 +2684,7 @@ Screen.display(() => {
                     e.taken = true;
                     if (e.kind === "fuse") {
                         fusesCollected++;
+                        playSfx("pickup", 0, 0.95);
                         stalker.baseSpeed = fadd(stalker.baseSpeed, 0.003);
                         triggerScreenFlash(255, 200, 50, 56);
                         triggerRumble(160, 1);
@@ -2568,12 +2692,14 @@ Screen.display(() => {
                         showRadio(FUSE_RADIO_LABELS[fusesCollected] || "FUSIBLE RECOLECTADO.", 190);
                     } else if (e.kind === "battery") {
                         player.battery = toF64(Math.min(100.0, fadd(player.battery, 45.0)));
+                        playSfx("pickup", 0, 0.85);
                         triggerScreenFlash(50, 220, 255, 48);
                         triggerRumble(90, 1);
                         showPopup("+45% BATERIA");
                         showRadio("BATERIA +45% RECUPERADA.", 140);
                     } else if (e.kind === "breaker") {
                         breakerActive = true;
+                        playSfx("breaker", 0, 1.0);
                         for (let gy = 0; gy < worldGrid.length; gy++) {
                             for (let gx = 0; gx < worldGrid[gy].length; gx++) {
                                 if (worldGrid[gy][gx] === 5) worldGrid[gy][gx] = 0;
@@ -2584,6 +2710,7 @@ Screen.display(() => {
                         showPopup("REJAS DESBLOQUEADAS");
                         showRadio("DISYUNTOR ACTIVADO: Se abrieron las rejas Este y Oeste!", 240);
                     } else if (e.kind === "note") {
+                        playSfx("pickup", 0, 0.75);
                         if (!collectedNotes[e.msgIdx]) {
                             collectedNotes[e.msgIdx] = true;
                             notesFoundCount++;
@@ -2606,6 +2733,12 @@ Screen.display(() => {
 
             const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty);
             const dangerRatio = toF64(Math.max(0.0, Math.min(1.0, (7.0 - toF64(ai.distP)) / 7.0)));
+            setMusicTrack(stalker.state === AI_HUNT ? "chase" : "ambient");
+
+            const hbPeriod = Math.max(14, (42.0 - dangerRatio * 26.0) | 0);
+            if (((dangerRatio - 0.28) > 0) && ((frameTick % hbPeriod) === 0)) {
+                playSfx("heartbeat", (ai.sideBias * 90.0) | 0, 0.55 + dangerRatio * 0.45);
+            }
 
             if (((dangerRatio - 0.28) > 0) && (frameTick % Math.max(12, (38.0 - dangerRatio * 24.0) | 0) < 4)) {
                 triggerRumble((dangerRatio * 185.0) | 0, 1);
@@ -2617,6 +2750,8 @@ Screen.display(() => {
                 jumpscareTimer = 42;
                 endCursor = 0;
                 gameState = STATE_JUMPSCARE;
+                setMusicTrack("ambient");
+                playSfx("jumpscare", 0, 1.0);
                 triggerRumble(255, 1);
                 return;
             }

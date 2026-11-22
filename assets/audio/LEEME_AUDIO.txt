@@ -1,0 +1,26 @@
+SUBSUELO 04 - GUIA DE ARCHIVOS DE AUDIO PARA PS2 (AthenaEnv V4)
+================================================================
+
+Todos los archivos van dentro de esta carpeta: assets/audio/
+Cada archivo es opcional: si existe se reproduce automaticamente; si falta se omite sin errores.
+
+1) MUSICA / AMBIENTES (Sound.Stream)
+   Formato recomendado: OGG Vorbis (.ogg), 48000 Hz, Estereo, 96-128 kbps
+   (Alternativa soportada: WAV PCM 16-bit, 48000 Hz, Estereo)
+
+   - ambient.ogg      : Ambiente principal en bucle (menus y exploracion)
+   - chase.ogg        : Musica tensa en bucle cuando El Acechador te persigue
+
+2) EFECTOS DE SONIDO CORTOS (Sound.Sfx)
+   Formato obligatorio en PS2: PS2 SPU2 ADPCM (.adp), Mono, 22050 Hz o 48000 Hz
+   (Convertir desde WAV mono 16-bit usando adpenc del PS2SDK)
+
+   - step.adp         : Paso al caminar / correr
+   - flashlight.adp   : Clic al encender / apagar la linterna (Triangulo)
+   - pickup.adp       : Recoger fusible, bateria o nota
+   - breaker.adp      : Activar el Disyuntor rojo / abrir rejas
+   - gate_locked.adp  : Golpe metalico al chocar con una reja cerrada
+   - heartbeat.adp    : Latido de corazon con paneo 3D cuando el enemigo esta cerca
+   - jumpscare.adp    : Impacto / grito cuando El Acechador te atrapa
+   - ui_move.adp      : Mover cursor en menus
+   - ui_select.adp    : Confirmar opcion en menus
