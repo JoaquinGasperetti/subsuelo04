@@ -932,6 +932,7 @@ const LOAD_SPINNERS = ["|", "/", "-", "\\"];
 
 // Cola de streaming 3D progresivo durante STATE_PLAY (1 recurso cada ~18 frames)
 let hwStreamStep = 0;
+let hwRenderInitDone = false;
 let hwStreamCooldown = 12;
 let hwStreamDone = false;
 let hwStreamFailed = false;
@@ -1099,8 +1100,22 @@ function tickProgressive3DStream() {
                 return;
             }
             try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
+            // OBLIGATORIO en AthenaEnv: Render.init() registra las matrices de la camara y carga
+            // los microprogramas VU1. Sin esto Camera.update() y render() cuelgan la PS2 real.
+            if (!hwRenderInitDone) {
+                if (typeof Render.init !== "function") {
+                    hwLoadErrorMsg = "Render.init no existe";
+                    hwStreamFailed = true;
+                    hw3dReady = false;
+                    return;
+                }
+                Render.init();
+                hwRenderInitDone = true;
+            }
             updateHw3dProjection();
-            Camera.type(Camera.LOOKAT);
+            if (typeof Camera.type === "function" && typeof Camera.LOOKAT !== "undefined") {
+                Camera.type(Camera.LOOKAT);
+            }
 
             let l0 = 0;
             let l1 = 1;
@@ -3303,10 +3318,17 @@ Screen.display(() => {
             fnt.color = rgba(245, 245, 250, 128);
             fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
             if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
-                Draw.rect(SCREEN_W - sx - 182, topY + 34, 178, 22, rgba(12, 16, 26, 112));
+                const pendStep = HW3D_STREAM_STEPS[hwStreamStep];
+                Draw.rect(SCREEN_W - sx - 262, topY + 34, 258, 22, rgba(12, 16, 26, 112));
                 fnt.scale = Math.fround(0.46);
                 fnt.color = rgba(110, 230, 255, 128);
-                fnt.print(SCREEN_W - sx - 174, topY + 38, STREAM_3D_BADGES[hwStreamStep] || "CARGANDO 3D...");
+                fnt.print(SCREEN_W - sx - 254, topY + 38, (STREAM_3D_BADGES[hwStreamStep] || "CARGANDO 3D...") + (pendStep ? " > " + pendStep.label : ""));
+            }
+            if (GAME_SETTINGS.qualityIndex === 0 && hwStreamFailed) {
+                Draw.rect(SCREEN_W - sx - 322, topY + 34, 318, 22, rgba(40, 8, 8, 120));
+                fnt.scale = Math.fround(0.44);
+                fnt.color = rgba(255, 150, 130, 128);
+                fnt.print(SCREEN_W - sx - 314, topY + 38, "3D FALLO: " + String(hwLoadErrorMsg || "?").slice(0, 34));
             }
 
             fnt.color = rgba(250, 215, 95, 128);
