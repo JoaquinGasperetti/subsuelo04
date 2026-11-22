@@ -908,12 +908,47 @@ let hwPropObjs = {};
 let hwStalkerObj = null;
 let hwStalkerIsGltf = false;
 
+// Estado de carga progresiva (1 recurso por cuadro con barra de progreso real)
+let hwLoadStep = 0;
+let hwLoadPhase = 0; // 0 = dibujar nombre en pantalla, 1 = cargar recurso del USB
+let hwLoadDone = false;
+let hwLoadFailed = false;
+let hwLoadErrorMsg = "";
+let hwLoadOkCount = 0;
+
+const HW3D_LOAD_STEPS = [
+    { kind: "init",    label: "CONFIGURANDO Z-BUFFER, CAMARA Y VU1..." },
+    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "MAPA: PISO (map_floor.obj)" },
+    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "MAPA: TECHO (map_ceiling.obj)" },
+    { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "MAPA: HORMIGON (map_walls_concrete.obj)" },
+    { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "MAPA: OXIDO (map_walls_rust.obj)" },
+    { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "MAPA: RITUAL (map_walls_ritual.obj)" },
+    { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "MAPA: SALIDA (map_exit.obj)" },
+    { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS (map_gates.obj)" },
+    { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEM: FUSIBLE (fuse.obj)" },
+    { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEM: BATERIA (battery.obj)" },
+    { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEM: DISYUNTOR (breaker.obj)" },
+    { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEM: REGISTRO (note.obj)" },
+    { kind: "stalker", obj: "assets/models/stalker.glb",            tex: "assets/textures/stalker.png",       label: "ENTIDAD: ACECHADOR (stalker.glb)" },
+    { kind: "audio",   label: "INICIANDO AUDIO PS2 (audsrv)..." }
+];
+
+const LOAD_PCT_LABELS = [
+    "0%   (0/14)",  "7%   (1/14)",  "14%  (2/14)",  "21%  (3/14)",  "28%  (4/14)",
+    "35%  (5/14)",  "42%  (6/14)",  "50%  (7/14)",  "57%  (8/14)",  "64%  (9/14)",
+    "71%  (10/14)", "78%  (11/14)", "85%  (12/14)", "92%  (13/14)", "100% (14/14)"
+];
+const LOAD_SPINNERS = ["|", "/", "-", "\\"];
+
 function loadHwMesh(objPath, texPath) {
     if (!fileExistsSafe(objPath)) return null;
     try {
         let tex = null;
         if (texPath && fileExistsSafe(texPath)) {
             tex = new Image(texPath);
+            if (tex && typeof tex.optimize === "function") {
+                try { tex.optimize(); } catch (_) {}
+            }
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
         if (!data) return null;
@@ -926,9 +961,44 @@ function loadHwMesh(objPath, texPath) {
             obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
         }
         return obj;
-    } catch (_) {
+    } catch (e) {
+        hwLoadErrorMsg = e ? String(e) : "Error de carga 3D";
         return null;
     }
+}
+
+function loadHwStalker(glbPath, fallbackTexPath) {
+    if (fileExistsSafe(glbPath)) {
+        try {
+            const data = new RenderData(glbPath);
+            if (data) {
+                // Si el GLB no enlazo textura embebida, asignar respaldo 256x256
+                let hasTex = false;
+                try { hasTex = !!(typeof data.getTexture === "function" && data.getTexture(0)); } catch (_) {}
+                if (!hasTex && fallbackTexPath && fileExistsSafe(fallbackTexPath) && typeof data.setTexture === "function") {
+                    try {
+                        const ftex = new Image(fallbackTexPath);
+                        if (ftex && typeof ftex.optimize === "function") ftex.optimize();
+                        if (ftex) data.setTexture(0, ftex);
+                    } catch (_) {}
+                }
+                try { data.accurate_clipping = true; } catch (_) {}
+                try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
+                try { data.pipeline = Render.PL_DEFAULT; } catch (_) {}
+                const obj = new RenderObject(data);
+                if (obj) {
+                    obj.position = { x: 0.0, y: 0.0, z: 0.0 };
+                    obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
+                    hwStalkerIsGltf = true;
+                    return obj;
+                }
+            }
+        } catch (e) {
+            hwLoadErrorMsg = e ? String(e) : "Error GLB";
+        }
+    }
+    hwStalkerIsGltf = false;
+    return loadHwMesh("assets/models/stalker_placeholder.obj", fallbackTexPath);
 }
 
 function updateHw3dProjection() {
@@ -941,66 +1011,152 @@ function updateHw3dProjection() {
     } catch (_) {}
 }
 
-function initHardware3D() {
-    if (hw3dReady) return true;
-    if (hw3dAttempted) return false;
-    hw3dAttempted = true;
-    try {
-        if (typeof Render === "undefined" || typeof RenderData !== "function" ||
-            typeof RenderObject !== "function" || typeof Camera === "undefined" ||
-            typeof Lights === "undefined" || typeof Image !== "function") {
-            return false;
-        }
-        if (!fileExistsSafe("assets/models/map_floor.obj")) return false;
-
-        try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
-        updateHw3dProjection();
-        Camera.type(Camera.LOOKAT);
-
-        hwLightMain = Lights.new();
-        hwLightFill = Lights.new();
-        Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
-        Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
-        Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
-
-        const staticSpecs = [
-            ["assets/models/map_floor.obj",          "assets/textures/floor.png"],
-            ["assets/models/map_ceiling.obj",        "assets/textures/ceiling.png"],
-            ["assets/models/map_walls_concrete.obj", "assets/textures/wall_concrete.png"],
-            ["assets/models/map_walls_rust.obj",     "assets/textures/wall_rust.png"],
-            ["assets/models/map_walls_ritual.obj",   "assets/textures/wall_ritual.png"],
-            ["assets/models/map_exit.obj",           "assets/textures/exit_door.png"]
-        ];
-        hwStaticObjs = [];
-        for (let i = 0; i < staticSpecs.length; i++) {
-            const o = loadHwMesh(staticSpecs[i][0], staticSpecs[i][1]);
-            if (o) hwStaticObjs.push(o);
-        }
-        if (hwStaticObjs.length < 3) return false;
-
-        hwGatesObj = loadHwMesh("assets/models/map_gates.obj", "assets/textures/gate.png");
-
-        hwPropObjs.fuse    = loadHwMesh("assets/models/fuse.obj",    "assets/textures/fuse.png");
-        hwPropObjs.battery = loadHwMesh("assets/models/battery.obj", "assets/textures/battery.png");
-        hwPropObjs.breaker = loadHwMesh("assets/models/breaker.obj", "assets/textures/breaker.png");
-        hwPropObjs.note    = loadHwMesh("assets/models/note.obj",    "assets/textures/note.png");
-
-        // Carga automaticamente assets/models/stalker.glb si ya lo agregaste; sino usa placeholder 3D
-        if (fileExistsSafe("assets/models/stalker.glb")) {
-            hwStalkerObj = loadHwMesh("assets/models/stalker.glb", null);
-            hwStalkerIsGltf = !!hwStalkerObj;
-        }
-        if (!hwStalkerObj) {
-            hwStalkerObj = loadHwMesh("assets/models/stalker_placeholder.obj", "assets/textures/stalker.png");
-            hwStalkerIsGltf = false;
-        }
-
-        hw3dReady = true;
+function stepHardware3DLoad() {
+    if (hwLoadDone) return true;
+    const total = HW3D_LOAD_STEPS.length;
+    if (hwLoadStep >= total) {
+        hw3dReady = (hwStaticObjs.length >= 3);
+        hwLoadDone = true;
         return true;
-    } catch (_) {
-        hw3dReady = false;
-        return false;
     }
+
+    const step = HW3D_LOAD_STEPS[hwLoadStep];
+    try {
+        if (step.kind === "init") {
+            hw3dAttempted = true;
+            if (typeof Render === "undefined" || typeof RenderData !== "function" ||
+                typeof RenderObject !== "function" || typeof Camera === "undefined" ||
+                typeof Lights === "undefined" || typeof Image !== "function" ||
+                !fileExistsSafe("assets/models/map_floor.obj")) {
+                hwLoadFailed = true;
+                hw3dReady = false;
+                hwLoadStep = total - 1; // saltar directo a audio y luego titulo en modo 2.5D
+                return false;
+            }
+            // Activar Z-Buffer de 16 bits para 3D real ahorrando VRAM en PS2
+            try {
+                const canvas = Screen.getMode();
+                if (canvas && typeof Screen.setMode === "function") {
+                    canvas.zbuffering = true;
+                    if (typeof Screen.Z16S !== "undefined") canvas.psmz = Screen.Z16S;
+                    Screen.setMode(canvas);
+                }
+            } catch (_) {}
+            try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
+            updateHw3dProjection();
+            Camera.type(Camera.LOOKAT);
+
+            hwLightMain = Lights.new();
+            hwLightFill = Lights.new();
+            Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
+            Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
+            Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
+            hwStaticObjs = [];
+            hwLoadOkCount++;
+        } else if (step.kind === "static") {
+            const o = loadHwMesh(step.obj, step.tex);
+            if (o) {
+                hwStaticObjs.push(o);
+                hwLoadOkCount++;
+            }
+        } else if (step.kind === "gates") {
+            hwGatesObj = loadHwMesh(step.obj, step.tex);
+            if (hwGatesObj) hwLoadOkCount++;
+        } else if (step.kind === "prop") {
+            const o = loadHwMesh(step.obj, step.tex);
+            if (o) {
+                hwPropObjs[step.key] = o;
+                hwLoadOkCount++;
+            }
+        } else if (step.kind === "stalker") {
+            hwStalkerObj = loadHwStalker(step.obj, step.tex);
+            if (hwStalkerObj) hwLoadOkCount++;
+        } else if (step.kind === "audio") {
+            if (GAME_SETTINGS.audioVolume > 0 && !audioInitAttempted) {
+                initAudio();
+            }
+            hwLoadOkCount++;
+        }
+    } catch (e) {
+        hwLoadErrorMsg = e ? String(e) : "Excepcion en carga";
+    }
+
+    hwLoadStep++;
+    if (hwLoadStep >= total) {
+        hw3dReady = (!hwLoadFailed && hwStaticObjs.length >= 3);
+        hwLoadDone = true;
+        return true;
+    }
+    return false;
+}
+
+function drawLoadingScreen(screenW, screenH, fnt) {
+    Draw.rect(0, 0, screenW, screenH, rgba(7, 6, 10, 128));
+
+    const panelW = Math.min(540, screenW - 56);
+    const panelH = 244;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    Draw.rect(px, py, panelW, panelH, rgba(16, 14, 22, 124));
+    Draw.rect(px, py, panelW, 3, rgba(215, 38, 38, 128));
+    Draw.rect(px, py + panelH - 2, panelW, 2, rgba(95, 25, 32, 128));
+    Draw.rect(px, py, 2, panelH, rgba(95, 25, 32, 128));
+    Draw.rect(px + panelW - 2, py, 2, panelH, rgba(95, 25, 32, 128));
+
+    fnt.scale = Math.fround(0.95);
+    fnt.color = rgba(242, 48, 48, 128);
+    fnt.print(px + 24, py + 20, "SUBSUELO 04");
+
+    fnt.scale = Math.fround(0.54);
+    fnt.color = rgba(190, 195, 210, 128);
+    fnt.print(px + 24, py + 58, "CARGANDO MOTOR 3D VU1 EN PS2");
+
+    // Barra de progreso real
+    const total = HW3D_LOAD_STEPS.length;
+    const clampedStep = hwLoadStep < 0 ? 0 : (hwLoadStep > total ? total : hwLoadStep);
+    const barX = px + 24;
+    const barY = py + 94;
+    const barW = panelW - 48;
+    const barH = 28;
+    const fillW = ((barW * clampedStep) / total) | 0;
+
+    Draw.rect(barX - 2, barY - 2, barW + 4, barH + 4, rgba(130, 45, 55, 128));
+    Draw.rect(barX, barY, barW, barH, rgba(24, 22, 32, 128));
+    if (fillW > 0) {
+        Draw.rect(barX, barY, fillW, barH, rgba(210, 34, 42, 128));
+        Draw.rect(barX, barY, fillW, 5, rgba(255, 110, 95, 128));
+    }
+
+    // Porcentaje y paso actual (sin concatenacion de strings)
+    fnt.scale = Math.fround(0.60);
+    fnt.color = rgba(255, 232, 160, 128);
+    fnt.print(barX, barY + 38, LOAD_PCT_LABELS[clampedStep] || "0%   (0/14)");
+
+    // Indicador animado de vida (si se mueve, la PS2 NO esta congelada)
+    const spinIdx = ((frameTick >> 2) & 3);
+    fnt.scale = Math.fround(0.60);
+    fnt.color = rgba(110, 230, 255, 128);
+    fnt.print(barX + barW - 108, barY + 38, "ACTIVO");
+    fnt.print(barX + barW - 20, barY + 38, LOAD_SPINNERS[spinIdx]);
+
+    const scanY = barY + 66;
+    const scanW = 54;
+    const scanMax = barW - scanW;
+    const cycle = (frameTick * 6) % (scanMax * 2);
+    const scanOff = cycle <= scanMax ? cycle : (scanMax * 2 - cycle);
+    Draw.rect(barX, scanY, barW, 5, rgba(32, 36, 48, 128));
+    Draw.rect(barX + scanOff, scanY, scanW, 5, rgba(90, 220, 255, 128));
+
+    // Nombre exacto del archivo/paso en curso
+    const curStep = HW3D_LOAD_STEPS[clampedStep < total ? clampedStep : (total - 1)];
+    fnt.scale = Math.fround(0.50);
+    fnt.color = rgba(235, 238, 245, 128);
+    fnt.print(barX, barY + 84, curStep ? curStep.label : "FINALIZANDO...");
+
+    fnt.scale = Math.fround(0.46);
+    fnt.color = rgba(160, 170, 185, 128);
+    fnt.print(barX, py + panelH - 30, "PULSA [START] PARA MODO RAPIDO 2.5D");
 }
 
 function renderHardware3DWorld(
@@ -2430,8 +2586,9 @@ const STATE_CONTROLS  = 7;
 const STATE_LORE      = 8;
 const STATE_CREDITS   = 9;
 const STATE_NOTE_VIEW = 10;
+const STATE_LOADING   = 11;
 
-let gameState = STATE_TITLE;
+let gameState = STATE_LOADING;
 let returnState = STATE_TITLE;
 let frameTick = 0;
 let jumpscareTimer = 0;
@@ -2692,28 +2849,36 @@ Screen.display(() => {
         frameTick++;
         pad.update();
 
-        // Auto-inicializa el audio tras 15 frames estables si el volumen esta activado por defecto
-        if (frameTick === 15 && GAME_SETTINGS.audioVolume > 0 && !audioInitAttempted) {
+        // Auto-inicializa el audio si se salto la pantalla de carga y el volumen esta activado
+        if (gameState !== STATE_LOADING && frameTick >= 15 && GAME_SETTINGS.audioVolume > 0 && !audioInitAttempted) {
             initAudio();
         }
-        // Cede 2ms al planificador cooperativo del EE para que el hilo de audio Vorbis/audsrv no se quede sin buffer
+        // Cede 3ms al planificador cooperativo del EE para que el hilo de audio audsrv no se quede sin buffer
         if (audioReady && audioPlaying && typeof os !== "undefined" && os && typeof os.sleep === "function") {
             try { os.sleep(3); } catch (_) {}
         }
 
-        // Primer frame seguro: garantiza salida de video inmediata tras el logo de Athena en PS2 real
-        if (frameTick === 1) {
-            Draw.rect(0, 0, SCREEN_W, SCREEN_H, rgba(8, 6, 10, 128));
-            fnt.scale = Math.fround(0.75);
-            fnt.color = rgba(242, 48, 48, 128);
-            fnt.print(48, (SCREEN_H >> 1) - 24, "SUBSUELO 04");
-            fnt.scale = Math.fround(0.48);
-            fnt.color = rgba(200, 200, 210, 128);
-            fnt.print(48, (SCREEN_H >> 1) + 12, "CARGANDO MOTOR 3D VU1 EN PS2...");
+        // Pantalla de carga progresiva (1 recurso por frame con barra real + indicador de actividad)
+        if (gameState === STATE_LOADING) {
+            drawLoadingScreen(SCREEN_W, SCREEN_H, fnt);
+            if (frameTick > 2 && pad.justPressed(Pads.START)) {
+                hw3dReady = false;
+                hwLoadDone = true;
+                gameState = STATE_TITLE;
+                return;
+            }
+            // Frame 1 solo dibuja la pantalla inicial; luego alterna: fase 0 pinta nombre, fase 1 carga
+            if (frameTick <= 1) return;
+            if (hwLoadPhase === 0) {
+                hwLoadPhase = 1;
+                return;
+            }
+            hwLoadPhase = 0;
+            const finished = stepHardware3DLoad();
+            if (finished) {
+                gameState = STATE_TITLE;
+            }
             return;
-        }
-        if (frameTick === 2 && !hw3dAttempted) {
-            initHardware3D();
         }
 
         if (gameState === STATE_PLAY && isPadDisconnected()) {
