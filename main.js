@@ -909,34 +909,41 @@ let hwStalkerObj = null;
 let hwStalkerIsGltf = false;
 
 // Estado de carga progresiva (1 recurso por cuadro con barra de progreso real)
+// Orden seguro en PS2 real: primero modulos IOP y streams de audio (en pausa) con RAM/IOP limpios,
+// luego Z-Buffer + modelos 3D, y recien al final reproducir audio cuando el USB queda libre.
 let hwLoadStep = 0;
 let hwLoadPhase = 0; // 0 = dibujar nombre en pantalla, 1 = cargar recurso del USB
 let hwLoadDone = false;
 let hwLoadFailed = false;
+let hwLoadSkipAudio = false;
 let hwLoadErrorMsg = "";
 let hwLoadOkCount = 0;
 
 const HW3D_LOAD_STEPS = [
-    { kind: "init",    label: "CONFIGURANDO Z-BUFFER, CAMARA Y VU1..." },
-    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "MAPA: PISO (map_floor.obj)" },
-    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "MAPA: TECHO (map_ceiling.obj)" },
-    { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "MAPA: HORMIGON (map_walls_concrete.obj)" },
-    { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "MAPA: OXIDO (map_walls_rust.obj)" },
-    { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "MAPA: RITUAL (map_walls_ritual.obj)" },
-    { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "MAPA: SALIDA (map_exit.obj)" },
-    { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS (map_gates.obj)" },
-    { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEM: FUSIBLE (fuse.obj)" },
-    { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEM: BATERIA (battery.obj)" },
-    { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEM: DISYUNTOR (breaker.obj)" },
-    { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEM: REGISTRO (note.obj)" },
-    { kind: "stalker", obj: "assets/models/stalker.glb",            tex: "assets/textures/stalker.png",       label: "ENTIDAD: ACECHADOR (stalker.glb)" },
-    { kind: "audio",   label: "INICIANDO AUDIO PS2 (audsrv)..." }
+    { kind: "audio_iop",   label: "AUDIO: MODULOS IOP (libsd / audsrv)" },
+    { kind: "audio_amb",   label: "AUDIO: STREAM (ambient.wav)" },
+    { kind: "audio_chase", label: "AUDIO: STREAM (chase.wav)" },
+    { kind: "init",        label: "CONFIGURANDO Z-BUFFER, CAMARA Y VU1..." },
+    { kind: "static",      obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "MAPA: PISO (map_floor.obj)" },
+    { kind: "static",      obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "MAPA: TECHO (map_ceiling.obj)" },
+    { kind: "static",      obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "MAPA: HORMIGON (map_walls_concrete.obj)" },
+    { kind: "static",      obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "MAPA: OXIDO (map_walls_rust.obj)" },
+    { kind: "static",      obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "MAPA: RITUAL (map_walls_ritual.obj)" },
+    { kind: "static",      obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "MAPA: SALIDA (map_exit.obj)" },
+    { kind: "gates",       obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS (map_gates.obj)" },
+    { kind: "prop",        key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEM: FUSIBLE (fuse.obj)" },
+    { kind: "prop",        key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEM: BATERIA (battery.obj)" },
+    { kind: "prop",        key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEM: DISYUNTOR (breaker.obj)" },
+    { kind: "prop",        key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEM: REGISTRO (note.obj)" },
+    { kind: "stalker",     obj: "assets/models/stalker.glb",            tex: "assets/textures/stalker.png",       label: "ENTIDAD: ACECHADOR (stalker.glb)" },
+    { kind: "audio_play",  label: "ACTIVANDO AUDIO Y MENU PRINCIPAL..." }
 ];
 
 const LOAD_PCT_LABELS = [
-    "0%   (0/14)",  "7%   (1/14)",  "14%  (2/14)",  "21%  (3/14)",  "28%  (4/14)",
-    "35%  (5/14)",  "42%  (6/14)",  "50%  (7/14)",  "57%  (8/14)",  "64%  (9/14)",
-    "71%  (10/14)", "78%  (11/14)", "85%  (12/14)", "92%  (13/14)", "100% (14/14)"
+    "0%   (0/17)",  "6%   (1/17)",  "12%  (2/17)",  "18%  (3/17)",  "24%  (4/17)",
+    "29%  (5/17)",  "35%  (6/17)",  "41%  (7/17)",  "47%  (8/17)",  "53%  (9/17)",
+    "59%  (10/17)", "65%  (11/17)", "71%  (12/17)", "76%  (13/17)", "82%  (14/17)",
+    "88%  (15/17)", "94%  (16/17)", "100% (17/17)"
 ];
 const LOAD_SPINNERS = ["|", "/", "-", "\\"];
 
@@ -972,7 +979,6 @@ function loadHwStalker(glbPath, fallbackTexPath) {
         try {
             const data = new RenderData(glbPath);
             if (data) {
-                // Si el GLB no enlazo textura embebida, asignar respaldo 256x256
                 let hasTex = false;
                 try { hasTex = !!(typeof data.getTexture === "function" && data.getTexture(0)); } catch (_) {}
                 if (!hasTex && fallbackTexPath && fileExistsSafe(fallbackTexPath) && typeof data.setTexture === "function") {
@@ -1006,7 +1012,6 @@ function updateHw3dProjection() {
     if (hw3dLastWide === isWide) return;
     hw3dLastWide = isWide;
     try {
-        // FOV vertical equilibrado (54 deg en 4:3, 62 deg en 16:9) sin mareo en esquinas
         Render.setView(isWide ? 62.0 : 54.0, 0.25, 36.0);
     } catch (_) {}
 }
@@ -1015,14 +1020,54 @@ function stepHardware3DLoad() {
     if (hwLoadDone) return true;
     const total = HW3D_LOAD_STEPS.length;
     if (hwLoadStep >= total) {
-        hw3dReady = (hwStaticObjs.length >= 3);
+        hw3dReady = (!hwLoadFailed && hwStaticObjs.length >= 3);
         hwLoadDone = true;
         return true;
     }
 
     const step = HW3D_LOAD_STEPS[hwLoadStep];
     try {
-        if (step.kind === "init") {
+        if (step.kind === "audio_iop") {
+            if (!hwLoadSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound) {
+                audioInitAttempted = true;
+                ensureAudioIOP();
+            }
+            hwLoadOkCount++;
+        } else if (step.kind === "audio_amb") {
+            if (!hwLoadSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
+                const ambPath = resolveFirstExisting([
+                    "assets/audio/ambient.wav",
+                    "assets/audio/ambient.ogg",
+                    "assets/ambient.wav",
+                    "assets/ambient.ogg"
+                ]);
+                if (ambPath) {
+                    try {
+                        ambientStream = new Sound.Stream(ambPath);
+                        if (ambientStream) ambientStream.loop = true;
+                    } catch (_) {
+                        ambientStream = null;
+                    }
+                }
+            }
+            hwLoadOkCount++;
+        } else if (step.kind === "audio_chase") {
+            if (!hwLoadSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
+                const chasePath = resolveFirstExisting([
+                    "assets/audio/chase.wav",
+                    "assets/audio/chase.ogg"
+                ]);
+                if (chasePath) {
+                    try {
+                        chaseStream = new Sound.Stream(chasePath);
+                        if (chaseStream) chaseStream.loop = true;
+                    } catch (_) {
+                        chaseStream = null;
+                    }
+                }
+            }
+            hwLoadOkCount++;
+        } else if (step.kind === "init") {
             hw3dAttempted = true;
             if (typeof Render === "undefined" || typeof RenderData !== "function" ||
                 typeof RenderObject !== "function" || typeof Camera === "undefined" ||
@@ -1030,10 +1075,9 @@ function stepHardware3DLoad() {
                 !fileExistsSafe("assets/models/map_floor.obj")) {
                 hwLoadFailed = true;
                 hw3dReady = false;
-                hwLoadStep = total - 1; // saltar directo a audio y luego titulo en modo 2.5D
+                hwLoadStep = total - 1;
                 return false;
             }
-            // Activar Z-Buffer de 16 bits para 3D real ahorrando VRAM en PS2
             try {
                 const canvas = Screen.getMode();
                 if (canvas && typeof Screen.setMode === "function") {
@@ -1071,9 +1115,14 @@ function stepHardware3DLoad() {
         } else if (step.kind === "stalker") {
             hwStalkerObj = loadHwStalker(step.obj, step.tex);
             if (hwStalkerObj) hwLoadOkCount++;
-        } else if (step.kind === "audio") {
-            if (GAME_SETTINGS.audioVolume > 0 && !audioInitAttempted) {
-                initAudio();
+        } else if (step.kind === "audio_play") {
+            requestGC();
+            if (!hwLoadSkipAudio && (ambientStream || chaseStream)) {
+                audioReady = true;
+                audioPlaying = false;
+                activeTrack = "ambient";
+                lastAppliedVol = -1;
+                applyAudioVolume(GAME_SETTINGS.audioVolume);
             }
             hwLoadOkCount++;
         }
@@ -1094,7 +1143,7 @@ function drawLoadingScreen(screenW, screenH, fnt) {
     Draw.rect(0, 0, screenW, screenH, rgba(7, 6, 10, 128));
 
     const panelW = Math.min(540, screenW - 56);
-    const panelH = 244;
+    const panelH = 258;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
@@ -1106,17 +1155,16 @@ function drawLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.95);
     fnt.color = rgba(242, 48, 48, 128);
-    fnt.print(px + 24, py + 20, "SUBSUELO 04");
+    fnt.print(px + 24, py + 18, "SUBSUELO 04");
 
     fnt.scale = Math.fround(0.54);
     fnt.color = rgba(190, 195, 210, 128);
-    fnt.print(px + 24, py + 58, "CARGANDO MOTOR 3D VU1 EN PS2");
+    fnt.print(px + 24, py + 56, "CARGANDO MOTOR 3D VU1 EN PS2");
 
-    // Barra de progreso real
     const total = HW3D_LOAD_STEPS.length;
     const clampedStep = hwLoadStep < 0 ? 0 : (hwLoadStep > total ? total : hwLoadStep);
     const barX = px + 24;
-    const barY = py + 94;
+    const barY = py + 90;
     const barW = panelW - 48;
     const barH = 28;
     const fillW = ((barW * clampedStep) / total) | 0;
@@ -1128,12 +1176,10 @@ function drawLoadingScreen(screenW, screenH, fnt) {
         Draw.rect(barX, barY, fillW, 5, rgba(255, 110, 95, 128));
     }
 
-    // Porcentaje y paso actual (sin concatenacion de strings)
     fnt.scale = Math.fround(0.60);
     fnt.color = rgba(255, 232, 160, 128);
-    fnt.print(barX, barY + 38, LOAD_PCT_LABELS[clampedStep] || "0%   (0/14)");
+    fnt.print(barX, barY + 38, LOAD_PCT_LABELS[clampedStep] || "0%   (0/17)");
 
-    // Indicador animado de vida (si se mueve, la PS2 NO esta congelada)
     const spinIdx = ((frameTick >> 2) & 3);
     fnt.scale = Math.fround(0.60);
     fnt.color = rgba(110, 230, 255, 128);
@@ -1148,15 +1194,15 @@ function drawLoadingScreen(screenW, screenH, fnt) {
     Draw.rect(barX, scanY, barW, 5, rgba(32, 36, 48, 128));
     Draw.rect(barX + scanOff, scanY, scanW, 5, rgba(90, 220, 255, 128));
 
-    // Nombre exacto del archivo/paso en curso
     const curStep = HW3D_LOAD_STEPS[clampedStep < total ? clampedStep : (total - 1)];
     fnt.scale = Math.fround(0.50);
     fnt.color = rgba(235, 238, 245, 128);
     fnt.print(barX, barY + 84, curStep ? curStep.label : "FINALIZANDO...");
 
-    fnt.scale = Math.fround(0.46);
+    fnt.scale = Math.fround(0.45);
     fnt.color = rgba(160, 170, 185, 128);
-    fnt.print(barX, py + panelH - 30, "PULSA [START] PARA MODO RAPIDO 2.5D");
+    fnt.print(barX, py + panelH - 44, "[START] MODO RAPIDO 2.5D");
+    fnt.print(barX, py + panelH - 22, "[CIRCULO] CARGAR SIN AUDIO");
 }
 
 function renderHardware3DWorld(
@@ -2866,6 +2912,10 @@ Screen.display(() => {
                 hwLoadDone = true;
                 gameState = STATE_TITLE;
                 return;
+            }
+            if (frameTick > 2 && pad.justPressed(Pads.CIRCLE)) {
+                hwLoadSkipAudio = true;
+                audioInitAttempted = true;
             }
             // Frame 1 solo dibuja la pantalla inicial; luego alterna: fase 0 pinta nombre, fase 1 carga
             if (frameTick <= 1) return;
