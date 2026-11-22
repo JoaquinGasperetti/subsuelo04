@@ -63,3 +63,13 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 - **Motor 3D VU1 + Enemigo 3D**: Inicialización compatible con el `athena.elf` incluido (`Render.setView` sin requerir `Render.init()`), activación/desactivación automática de `Screen.DEPTH_TEST_ENABLE` entre el pase 3D y el HUD 2D, `accurate_clipping` en geometría del mapa y carga prioritaria de `assets/models/stalker.obj` (con fallback a `stalker.glb` y `stalker_placeholder.obj`).
 - **Textos nítidos en menús**: Fuente TrueType `assets/fonts/ui.ttf` (FreeType) con sombra sutil y escalas `>= 0.70` en todos los textos secundarios de menús para evitar borrosidad en 480i.
 - **Logo HK Entertainment**: Se desactivó el boot logo de AthenaEnv en `athena.ini` (`boot_logo = false`), se agregó la pantalla de arranque con `assets/textures/hk_logo.png` (256x256, liberada de VRAM antes de jugar) y se incluyó el ícono `ART/athena.elf_ICO.png` (64x64 PNG 8-bit) para copiar a `mass:/ART/` si deseás verlo en la lista APPS de OPL.
+
+## Cambios preparados en esta sesión para PS2/OPL
+
+- **Geometría del nivel:** se optimizaron los cuatro OBJ estáticos del escenario conservando sus rutas. La geometría pasa de 1.592 a 666 triángulos (58,2 % menos), y el conjunto de esos modelos baja aproximadamente de 208 KB a 85 KB. Esto reduce el trabajo de carga y dibujo desde USB 1.1.
+- **Cámara 3D:** el pase actualiza primero el objetivo y después vuelve a fijar la posición. AthenaEnv modifica la posición dentro de `Camera.target()`, así que ese orden evita que se arrastre al girar o caminar.
+- **Profundidad y artifacts:** el pase 3D fija `DEPTH_GEQUAL` explícitamente y usa un plano lejano de 80 unidades en lugar de 2.000. El nivel ocupa unas 40 unidades; limitar el rango mejora la precisión del Z-buffer de 16 bits de PS2 y busca reducir el parpadeo de superficies al moverse.
+- **Compatibilidad:** los cambios conservan el ELF de AthenaEnv, los nombres y rutas de assets, y el arranque desde USB mediante OPL. No agregan dependencias ni requieren conexión de red.
+
+La corrección de cámara y profundidad está preparada en el paquete de prueba. La validación final de esos ajustes debe hacerse en una PS2 real; no se presenta como una prueba confirmada de hardware.
+
