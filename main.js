@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 // SUBSUELO 04: EL ACECHADOR (PS2 Real Hardware - Single-File Bundle)
 // Cero imports ES6: 100% compatible con OPL (DVD ISO cdfs:/ y APPS mass:),
 // wLaunchELF y PCSX2 sin problemas de rutas relativas ni mayusculas.
@@ -497,8 +497,7 @@ const LORE_NOTES = [
         lines: [
             "ORDEN DE EMERGENCIA - SALIDA NORTE",
             "La compuerta blindada al Norte (arriba",
-            "en el PDA) requiere los 4 FUSIBLES.",
-            "Cuando el panel pase a VERDE, corre",
+            "en el PDA) requiere los 4 FUSIBLES.",            "Cuando el panel pase a VERDE, corre",
             "hacia la salida. No mires atras."
         ]
     }
@@ -905,8 +904,7 @@ let hwLightFill = -1;
 let hwStaticObjs = [];
 let hwGatesObj = null;
 let hwPropObjs = {};
-let hwPropData = {};
-let hwEntityObjs = [];
+let hwEntityTransforms = [];
 let hwLastFlashState = -1;
 let hwPlayFrameCount = 0;
 let hwVramLabel = "VRAM:--";
@@ -997,8 +995,7 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (obj) {
             obj.position = { x: 0.0, y: 0.0, z: 0.0 };
             obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
-        }
-        return obj;
+        }        return obj;
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error carga 3D";
         return null;
@@ -1031,28 +1028,21 @@ function updateHw3dProjection() {
     }
 }
 
-function buildHwEntityInstances() {
-    hwEntityObjs = [];
+function buildHwEntityTransforms() {
+    hwEntityTransforms = [];
     for (let i = 0; i < entities.length; i++) {
         const e = entities[i];
-        const data = hwPropData[e.kind];
-        if (!data) {
-            hwEntityObjs.push(null);
-            continue;
-        }
-        try {
-            const inst = new RenderObject(data);
-            const ex = toF64(e.x) * WORLD_CELL_SIZE;
-            const ez = toF64(e.y) * WORLD_CELL_SIZE;
-            let ey = 0.55;
-            if (e.kind === "breaker") ey = 0.0;
-            else if (e.kind === "note") ey = 0.04;
-            inst.position = { x: ex, y: ey, z: ez };
-            inst.rotation = { x: 0.0, y: 0.0, z: 0.0 };
-            hwEntityObjs.push(inst);
-        } catch (_) {
-            hwEntityObjs.push(null);
-        }
+        let y = 0.55;
+        if (e.kind === "breaker") y = 0.0;
+        else if (e.kind === "note") y = 0.04;
+        hwEntityTransforms.push({
+            position: {
+                x: toF64(e.x) * WORLD_CELL_SIZE,
+                y: y,
+                z: toF64(e.y) * WORLD_CELL_SIZE
+            },
+            rotation: { x: 0.0, y: 0.0, z: 0.0 }
+        });
     }
 }
 
@@ -1201,10 +1191,7 @@ function tickProgressive3DStream() {
             hwGatesObj = loadHwMesh(step.obj, step.tex, true);
         } else if (step.kind === "prop") {
             const o = loadHwMesh(step.obj, step.tex, false);
-            if (o) {
-                hwPropObjs[step.key] = o;
-                hwPropData[step.key] = hwKeptRenderData[hwKeptRenderData.length - 1] || null;
-            }
+            if (o) hwPropObjs[step.key] = o;
         }
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error stream 3D";
@@ -1417,16 +1404,24 @@ function renderHardware3DWorld(
             hwGatesObj.render();
         }
 
-        // 3. Items 3D (1 RenderObject dedicado por item, cero allocaciones por cuadro)
+        // 3. Items 3D: reutilizar un RenderObject por tipo evita agotar recursos nativos de PS2.
+        const spinY = toF64(frameTick * 0.03);
+        const bobY = toF64(Math.sin(frameTick * 0.08) * 0.08);
         for (let i = 0; i < entities.length; i++) {
             const e = entities[i];
             if (e.taken) continue;
-            const inst = hwEntityObjs[i];
-            if (!inst) continue;
+            const prop = hwPropObjs[e.kind];
+            if (!prop) continue;
             const dxC = toF64(e.x) - px;
             const dyC = toF64(e.y) - py;
             if ((dxC * dxC + dyC * dyC) > 81.0) continue;
-            inst.render();
+            const pose = hwEntityTransforms[i];
+            if (!pose) continue;
+            if (e.kind !== "breaker" && e.kind !== "note") pose.position.y = 0.55 + bobY;
+            pose.rotation.y = (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY;
+            prop.position = pose.position;
+            prop.rotation = pose.rotation;
+            prop.render();
         }
 
         // 4. El Acechador en 3D (visible hasta 30m / 15 celdas)
@@ -1497,8 +1492,7 @@ function render3DWorld(
     const dRatio = toF64(dangerRatio);
     const fovVal = toF64(fov);
     const fInt = toF64(flashIntensity);
-    const mAnim = toF64(mapAnim);
-    const sBias = toF64(sideBias);
+    const mAnim = toF64(mapAnim);    const sBias = toF64(sideBias);
 
     const enableBob = GAME_SETTINGS.bob;
     const enableOverlays = GAME_SETTINGS.overlays;
@@ -1997,8 +1991,7 @@ function render3DWorld(
                 const by = Math.max(2, iy - ((itemSize * 0.45) | 0));
                 const bh = (itemSize * 1.25) | 0;
                 Draw.rect(ix - 4, by - 4, itemSize + 8, bh + 8, COL_BRK_HALO);
-                Draw.rect(ix, by, itemSize, bh, COL_BRK_OUT);
-                Draw.rect(ix + 2, by + 2, Math.max(4, itemSize - 4), Math.max(4, bh - 4), COL_BRK_IN);
+                Draw.rect(ix, by, itemSize, bh, COL_BRK_OUT);                Draw.rect(ix + 2, by + 2, Math.max(4, itemSize - 4), Math.max(4, bh - 4), COL_BRK_IN);
                 Draw.rect(ix + ((itemSize * 0.22) | 0), by + ((bh * 0.20) | 0), Math.max(2, (itemSize * 0.56) | 0), Math.max(2, (bh * 0.26) | 0), COL_BRK_WARN);
                 Draw.rect(ix + ((itemSize * 0.35) | 0), by + ((bh * 0.55) | 0), Math.max(2, (itemSize * 0.30) | 0), Math.max(3, (bh * 0.32) | 0), COL_BRK_LEVER);
             } else if (sp.kind === "note") {
@@ -2497,8 +2490,7 @@ function drawControlsMenu(screenW, screenH, fnt) {
     drawPanel(px, py, panelW, panelH, "CONTROLES DUALSHOCK 2", fnt);
 
     const bindings = [
-        ["STICK IZQ / D-PAD",  "Caminar y moverse"],
-        ["STICK DER / L1-R1",  "Girar la camara"],
+        ["STICK IZQ / D-PAD",  "Caminar y moverse"],        ["STICK DER / L1-R1",  "Girar la camara"],
         ["CIRCULO / CUAD.",    "Correr (usa stamina)"],
         ["TRIANGULO",          "Linterna ON / OFF"],
         ["SELECT / L2",        "Abrir / cerrar mapa PDA"],
@@ -2997,8 +2989,7 @@ function triggerScreenFlash(r, g, b, alpha) {
 }
 
 function showPopup(msg, duration = 70) {
-    popupText = msg;
-    popupTimer = duration;
+    popupText = msg;    popupTimer = duration;
 }
 
 function showRadio(msg, duration = 220) {
@@ -3216,7 +3207,7 @@ Screen.display(() => {
                 mapLoadPhase = 0;
                 hwLastFlashState = -1;
                 hwPlayFrameCount = 0;
-                buildHwEntityInstances();
+                buildHwEntityTransforms();
                 switchState(STATE_PLAY);
                 return;
             }
@@ -3497,8 +3488,7 @@ Screen.display(() => {
                             notesFoundCount++;
                         }
                         activeNoteIdx = e.msgIdx;
-                        triggerScreenFlash(220, 230, 255, 38);
-                        showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
+                        triggerScreenFlash(220, 230, 255, 38);                        showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
                         switchState(STATE_NOTE_VIEW);
                         return;
                     }
