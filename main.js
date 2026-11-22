@@ -905,7 +905,15 @@ let hwLightFill = -1;
 let hwStaticObjs = [];
 let hwGatesObj = null;
 let hwPropObjs = {};
+let hwPropData = {};
+let hwEntityObjs = [];
+let hwLastFlashState = -1;
+let hwPlayFrameCount = 0;
+let hwVramLabel = "VRAM:--";
 let hwStalkerObj = null;
+// Referencias globales para evitar que el GC de QuickJS libere Image/RenderData en uso por RenderObject
+const hwKeptTextures = [];
+const hwKeptRenderData = [];
 let hwStalkerIsGltf = false;
 let hwStalkerSource = "NONE";
 
@@ -951,15 +959,14 @@ const HW3D_STREAM_STEPS = [
     { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEMS: FUSIBLES" },
     { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEMS: BATERIAS" },
     { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEMS: DISYUNTOR" },
-    { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEMS: NOTAS" },
-    { kind: "stalker", obj: "assets/models/stalker.obj",            tex: "assets/textures/stalker.png",       label: "ENEMIGO: EL ACECHADOR" }
+    { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEMS: NOTAS" }
 ];
 
 const MAP_PCT_LABELS = [
-    "0%   (0/13)",  "8%   (1/13)",  "15%  (2/13)",  "23%  (3/13)",
-    "31%  (4/13)",  "38%  (5/13)",  "46%  (6/13)",  "54%  (7/13)",
-    "62%  (8/13)",  "69%  (9/13)",  "77%  (10/13)", "85%  (11/13)",
-    "92%  (12/13)", "100% (13/13)"
+    "0%   (0/12)",  "8%   (1/12)",  "17%  (2/12)",  "25%  (3/12)",
+    "33%  (4/12)",  "42%  (5/12)",  "50%  (6/12)",  "58%  (7/12)",
+    "67%  (8/12)",  "75%  (9/12)",  "83%  (10/12)", "92%  (11/12)",
+    "100% (12/12)"
 ];
 
 const STREAM_3D_BADGES = [
@@ -981,6 +988,8 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
         if (!data) return null;
+        if (tex) hwKeptTextures.push(tex);
+        hwKeptRenderData.push(data);
         try { data.accurate_clipping = false; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try { data.pipeline = Render.PL_DEFAULT; } catch (_) {}
@@ -1004,14 +1013,6 @@ function loadHwStalker(objPath, texPath) {
         hwStalkerSource = "OBJ";
         return obj;
     }
-    if (fileExistsSafe("assets/models/stalker.glb")) {
-        obj = loadHwMesh("assets/models/stalker.glb", null, false);
-        if (obj) {
-            hwStalkerIsGltf = true;
-            hwStalkerSource = "GLB";
-            return obj;
-        }
-    }
     obj = loadHwMesh("assets/models/stalker_placeholder.obj", texPath, false);
     if (obj) {
         hwStalkerSource = "PROXY";
@@ -1027,6 +1028,31 @@ function updateHw3dProjection() {
         Render.setView(isWide ? 60.0 : 54.0, 1.0, 2000.0);
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error Render.setView";
+    }
+}
+
+function buildHwEntityInstances() {
+    hwEntityObjs = [];
+    for (let i = 0; i < entities.length; i++) {
+        const e = entities[i];
+        const data = hwPropData[e.kind];
+        if (!data) {
+            hwEntityObjs.push(null);
+            continue;
+        }
+        try {
+            const inst = new RenderObject(data);
+            const ex = toF64(e.x) * WORLD_CELL_SIZE;
+            const ez = toF64(e.y) * WORLD_CELL_SIZE;
+            let ey = 0.55;
+            if (e.kind === "breaker") ey = 0.0;
+            else if (e.kind === "note") ey = 0.04;
+            inst.position = { x: ex, y: ey, z: ez };
+            inst.rotation = { x: 0.0, y: 0.0, z: 0.0 };
+            hwEntityObjs.push(inst);
+        } catch (_) {
+            hwEntityObjs.push(null);
+        }
     }
 }
 
@@ -1152,6 +1178,9 @@ function tickProgressive3DStream() {
             hwLightMain = l0;
             hwLightFill = l1;
             try {
+                Lights.set(hwLightMain, Lights.DIRECTION, 0.0, -0.25, -1.0);
+                Lights.set(hwLightMain, Lights.AMBIENT, 0.16, 0.17, 0.20);
+                Lights.set(hwLightMain, Lights.DIFFUSE, 0.85, 0.82, 0.78);
                 Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
                 Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
                 Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
@@ -1172,7 +1201,10 @@ function tickProgressive3DStream() {
             hwGatesObj = loadHwMesh(step.obj, step.tex, true);
         } else if (step.kind === "prop") {
             const o = loadHwMesh(step.obj, step.tex, false);
-            if (o) hwPropObjs[step.key] = o;
+            if (o) {
+                hwPropObjs[step.key] = o;
+                hwPropData[step.key] = hwKeptRenderData[hwKeptRenderData.length - 1] || null;
+            }
         }
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error stream 3D";
@@ -1280,7 +1312,7 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.72);
     fnt.color = rgba(205, 210, 224, 128);
-    fnt.print(px + 24, py + 54, "PREPARANDO ESCENARIO 3D VU1...");
+    fnt.print(px + 24, py + 54, "PRUEBA 3D: ESCENARIO SIN STALKER");
 
     const total = HW3D_STREAM_STEPS.length;
     const clampedStep = hwStreamStep < 0 ? 0 : (hwStreamStep > total ? total : hwStreamStep);
@@ -1299,7 +1331,7 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.74);
     fnt.color = rgba(255, 232, 160, 128);
-    fnt.print(barX, barY + 38, MAP_PCT_LABELS[clampedStep] || "0%   (0/13)");
+    fnt.print(barX, barY + 38, MAP_PCT_LABELS[clampedStep] || "0%   (0/12)");
 
     const spinIdx = ((frameTick >> 2) & 3);
     fnt.scale = Math.fround(0.74);
@@ -1366,10 +1398,14 @@ function renderHardware3DWorld(
         Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
         Camera.update();
 
-        if (hwLightMain >= 0 && hwLightMain <= 3) {
-            Lights.set(hwLightMain, Lights.DIRECTION, -dirX, -0.22, -dirZ);
-            Lights.set(hwLightMain, Lights.AMBIENT, 0.14 + redTint * 0.35, 0.15, 0.18);
-            Lights.set(hwLightMain, Lights.DIFFUSE, Math.min(1.2, lPow + redTint), lPow * 0.96, lPow * 0.90);
+        // Actualizar luz principal solo cuando cambia la linterna (cero spam a C por cuadro)
+        const flashStateBit = flashActive ? 1 : 0;
+        if (hwLightMain >= 0 && hwLightMain <= 3 && flashStateBit !== hwLastFlashState) {
+            hwLastFlashState = flashStateBit;
+            const lp = flashActive ? 1.05 : 0.25;
+            Lights.set(hwLightMain, Lights.DIRECTION, 0.0, -0.35, -1.0);
+            Lights.set(hwLightMain, Lights.AMBIENT, flashActive ? 0.24 : 0.12, flashActive ? 0.24 : 0.13, flashActive ? 0.26 : 0.16);
+            Lights.set(hwLightMain, Lights.DIFFUSE, lp, lp * 0.96, lp * 0.90);
         }
 
         // 1. Escenario estatico 3D
@@ -1381,25 +1417,16 @@ function renderHardware3DWorld(
             hwGatesObj.render();
         }
 
-        // 3. Items 3D con culling por distancia (< 18m / 9 celdas)
-        const spinY = toF64(frameTick * 0.03);
-        const bobY = toF64(Math.sin(frameTick * 0.08) * 0.08);
+        // 3. Items 3D (1 RenderObject dedicado por item, cero allocaciones por cuadro)
         for (let i = 0; i < entities.length; i++) {
             const e = entities[i];
             if (e.taken) continue;
-            const prop = hwPropObjs[e.kind];
-            if (!prop) continue;
+            const inst = hwEntityObjs[i];
+            if (!inst) continue;
             const dxC = toF64(e.x) - px;
             const dyC = toF64(e.y) - py;
             if ((dxC * dxC + dyC * dyC) > 81.0) continue;
-            const ex = toF64(e.x) * WORLD_CELL_SIZE;
-            const ez = toF64(e.y) * WORLD_CELL_SIZE;
-            let ey = 0.55 + bobY;
-            if (e.kind === "breaker") ey = 0.0;
-            else if (e.kind === "note") ey = 0.04;
-            prop.position = { x: ex, y: ey, z: ez };
-            prop.rotation = { x: 0.0, y: (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY, z: 0.0 };
-            prop.render();
+            inst.render();
         }
 
         // 4. El Acechador en 3D (visible hasta 30m / 15 celdas)
@@ -3181,16 +3208,24 @@ Screen.display(() => {
                 switchState(STATE_PLAY);
                 return;
             }
+            if (hwStreamDone || hwStreamFailed) {
+                if (mapLoadPhase < 2) {
+                    mapLoadPhase++;
+                    return;
+                }
+                mapLoadPhase = 0;
+                hwLastFlashState = -1;
+                hwPlayFrameCount = 0;
+                buildHwEntityInstances();
+                switchState(STATE_PLAY);
+                return;
+            }
             if (mapLoadPhase === 0) {
                 mapLoadPhase = 1;
                 return;
             }
             mapLoadPhase = 0;
-            const done = stepOneMapLoad();
-            if (done) {
-                requestGC();
-                switchState(STATE_PLAY);
-            }
+            stepOneMapLoad();
             return;
         }
 
@@ -3309,6 +3344,14 @@ Screen.display(() => {
             }
         } else if (gameState === STATE_PLAY) {
             elapsedMs += dtMs;
+            hwPlayFrameCount++;
+            if ((hwPlayFrameCount % 30) === 1) {
+                let freeKb = -1;
+                try {
+                    if (typeof Screen.getFreeVRAM === "function") freeKb = (Screen.getFreeVRAM() / 1024) | 0;
+                } catch (_) {}
+                hwVramLabel = ["F:", String(hwPlayFrameCount), " VRAM:", String(freeKb), "KB"].join("");
+            }
             tickProgressive3DStream();
 
             if (pad.justPressed(Pads.START)) {
@@ -3558,6 +3601,12 @@ Screen.display(() => {
                 fnt.scale = Math.fround(0.62);
                 fnt.color = rgba(110, 230, 255, 128);
                 fnt.print(SCREEN_W - sx - 272, topY + 44, (STREAM_3D_BADGES[hwStreamStep] || "3D...") + (pendStep ? " " + pendStep.label : ""));
+            }
+            if (hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
+                Draw.rect(SCREEN_W - sx - 210, topY + 40, 206, 24, rgba(8, 14, 22, 118));
+                fnt.scale = Math.fround(0.60);
+                fnt.color = rgba(120, 245, 160, 128);
+                fnt.print(SCREEN_W - sx - 202, topY + 43, hwVramLabel);
             }
             if (GAME_SETTINGS.qualityIndex === 0 && hwStreamFailed) {
                 Draw.rect(SCREEN_W - sx - 340, topY + 40, 336, 26, rgba(40, 8, 8, 122));
