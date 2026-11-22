@@ -63,7 +63,7 @@ function clampF64(v, lo, hi) {
 
 // Empaquetado directo RGBA en entero de 32 bits (JS_TAG_INT), sin llamadas C a Color.new()
 function rgba(r, g, b, a) {
-    return (r & 255) | ((g & 255) << 8) | ((b & 255) << 16) | ((a & 255) << 24);
+    return ((r & 255) | ((g & 255) << 8) | ((b & 255) << 16) | ((a & 255) << 24)) >>> 0;
 }
 
 // Dispara el recolector de ciclos de QuickJS SOLO en transiciones de menú (nunca durante gameplay)
@@ -644,7 +644,7 @@ function ensureColLayout(screenW, numRays) {
 }
 
 // Colores estáticos precomputados
-const ALPHA_OPAQUE    = 128 << 24;
+const ALPHA_OPAQUE    = (128 << 24) >>> 0;
 const COL_HORIZON     = rgba(2, 2, 4, 128);
 const COL_SPOT_FADE   = rgba(20, 28, 38, 0);
 const COL_LOCK_BOX    = rgba(38, 40, 46, 128);
@@ -937,7 +937,7 @@ function render3DWorld(
             if (renderStats.wallMode === 1) {
                 Draw.rect(screenX, drawStart, colW, clippedH, COL_MAGENTA);
             } else {
-                Draw.rect(screenX, drawStart, colW, clippedH, cR | (cG << 8) | (cB << 16) | ALPHA_OPAQUE);
+                Draw.rect(screenX, drawStart, colW, clippedH, (cR | (cG << 8) | (cB << 16) | ALPHA_OPAQUE) >>> 0);
             }
 
             const cellKey = (mapY << 7) | (mapX << 1) | side;
@@ -996,7 +996,7 @@ function render3DWorld(
                     if (bR > 255) bR = 255;
                     if (bG > 255) bG = 255;
                     if (bB > 255) bB = 255;
-                    Draw.rect(screenX, gStart, colW, gClippedH, bR | (bG << 8) | (bB << 16) | ALPHA_OPAQUE);
+                    Draw.rect(screenX, gStart, colW, gClippedH, (bR | (bG << 8) | (bB << 16) | ALPHA_OPAQUE) >>> 0);
                     zBuffer[i] = gateDist;
                 } else {
                     const crossH = Math.max(2, (gWallH * 0.05) | 0);
@@ -1533,8 +1533,30 @@ function drawPanel(x, y, w, h, title, fnt, accentCol = COL_BORDER_RED) {
 function formatTime(secs) {
     const m = (secs / 60) | 0;
     const s = secs % 60;
-    return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+    const ms = m < 10 ? ["0", String(m)].join("") : String(m);
+    const ss = s < 10 ? ["0", String(s)].join("") : String(s);
+    return [ms, ":", ss].join("");
 }
+
+const TITLE_ITEMS_NORMAL = [
+    "NUEVA PARTIDA   < NORMAL >",
+    "OPCIONES Y VIDEO PS2",
+    "CONTROLES DUALSHOCK 2",
+    "EXPEDIENTE / HISTORIA",
+    "CREDITOS Y HARDWARE"
+];
+const TITLE_ITEMS_NIGHTMARE = [
+    "NUEVA PARTIDA   < PESADILLA >",
+    "OPCIONES Y VIDEO PS2",
+    "CONTROLES DUALSHOCK 2",
+    "EXPEDIENTE / HISTORIA",
+    "CREDITOS Y HARDWARE"
+];
+const LORE_TABS_OPEN = ["NOTA #01", "NOTA #02", "NOTA #03", "NOTA #04"];
+const LORE_TABS_LOCK = ["BLOQ #01", "BLOQ #02", "BLOQ #03", "BLOQ #04"];
+const PAUSE_REG_LABELS = ["REGISTROS (0/4)", "REGISTROS (1/4)", "REGISTROS (2/4)", "REGISTROS (3/4)", "REGISTROS (4/4)"];
+const END_OPTS_WIN = ["JUGAR DE NUEVO", "VOLVER AL MENU PRINCIPAL"];
+const END_OPTS_DEAD = ["REINTENTAR", "VOLVER AL MENU PRINCIPAL"];
 
 function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     const { sx, sy } = getSafeMargins();
@@ -1579,14 +1601,8 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     fnt.color = RECORDS.mcAvailable ? COL_CYAN : COL_MUTED;
     fnt.print(px + panelW - 185, py + 38, RECORDS.mcAvailable ? "MC0: DETECTADA" : "MC0: SIN GUARDADO");
 
-    // Opciones del Menú Principal
-    const items = [
-        "NUEVA PARTIDA   < " + DIFF_LABELS[GAME_SETTINGS.difficulty] + " >",
-        "OPCIONES Y VIDEO PS2",
-        "CONTROLES DUALSHOCK 2",
-        "EXPEDIENTE / HISTORIA",
-        "CREDITOS Y HARDWARE"
-    ];
+    // Opciones del Menú Principal (cadenas estáticas sin concatenación por frame para QuickJS PS2)
+    const items = GAME_SETTINGS.difficulty === 1 ? TITLE_ITEMS_NIGHTMARE : TITLE_ITEMS_NORMAL;
 
     const listY = py + 106;
     const rowH = 38;
@@ -1599,7 +1615,12 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
         }
         fnt.scale = Math.fround(selected ? 0.64 : 0.56);
         fnt.color = selected ? COL_GOLD : COL_WHITE;
-        fnt.print(px + (selected ? 38 : 34), ry + 1, (selected ? "> " : "  ") + items[i]);
+        if (selected) {
+            fnt.print(px + 34, ry + 1, ">");
+            fnt.print(px + 54, ry + 1, items[i]);
+        } else {
+            fnt.print(px + 48, ry + 1, items[i]);
+        }
     }
 
     // Pie de navegación
@@ -1646,7 +1667,7 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         fnt.print(px + 26, ry + 2, rows[i].label);
 
         fnt.color = sel ? COL_CYAN : COL_MUTED;
-        const valText = (i < rows.length - 1) ? ("< " + rows[i].val + " >") : rows[i].val;
+        const valText = (i < rows.length - 1) ? ["< ", String(rows[i].val), " >"].join("") : String(rows[i].val);
         fnt.print(px + panelW - 215, ry + 2, valText);
     }
 
@@ -1727,7 +1748,7 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
         if (sel) Draw.rect(tx, py + 64, tabW, 2, COL_SEL_BAR);
         fnt.scale = Math.fround(0.45);
         fnt.color = sel ? COL_GOLD : (unlocked ? COL_WHITE : COL_MUTED);
-        fnt.print(tx + 8, py + 47, unlocked ? ("NOTA #0" + (i + 1)) : ("BLOQ #0" + (i + 1)));
+        fnt.print(tx + 8, py + 47, unlocked ? LORE_TABS_OPEN[i] : LORE_TABS_LOCK[i]);
     }
 
     const note = LORE_NOTES[selectedNoteIdx];
@@ -1813,7 +1834,7 @@ function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
     const items = [
         "CONTINUAR PARTIDA",
         "OPCIONES Y VIDEO PS2",
-        "REGISTROS (" + notesFoundCount + "/4)",
+        PAUSE_REG_LABELS[notesFoundCount] || "REGISTROS (0/4)",
         "CONTROLES",
         "REINICIAR PARTIDA",
         "VOLVER AL MENU PRINCIPAL"
@@ -1830,7 +1851,12 @@ function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
         }
         fnt.scale = Math.fround(0.54);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
-        fnt.print(px + (sel ? 32 : 28), ry + 1, (sel ? "> " : "  ") + items[i]);
+        if (sel) {
+            fnt.print(px + 28, ry + 1, ">");
+            fnt.print(px + 48, ry + 1, items[i]);
+        } else {
+            fnt.print(px + 42, ry + 1, items[i]);
+        }
     }
 
     fnt.scale = Math.fround(0.42);
@@ -1907,7 +1933,7 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
         fnt.print(px + 20, py + 152, "o enfoca directamente sus ojos para frenarlo.");
     }
 
-    const opts = [isWin ? "JUGAR DE NUEVO" : "REINTENTAR", "VOLVER AL MENU PRINCIPAL"];
+    const opts = isWin ? END_OPTS_WIN : END_OPTS_DEAD;
     const optY = py + 190;
     for (let i = 0; i < opts.length; i++) {
         const ry = optY + i * 36;
@@ -1918,7 +1944,12 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
         }
         fnt.scale = Math.fround(0.54);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
-        fnt.print(px + 34, ry + 1, (sel ? "> " : "  ") + opts[i]);
+        if (sel) {
+            fnt.print(px + 30, ry + 1, ">");
+            fnt.print(px + 50, ry + 1, opts[i]);
+        } else {
+            fnt.print(px + 44, ry + 1, opts[i]);
+        }
     }
 }
 
@@ -1955,7 +1986,7 @@ const MODE_INFO = {
 };
 
 Screen.setVSync(true);
-try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {}
+if (typeof Screen.setParam === "function" && typeof Screen.DEPTH_TEST_ENABLE !== "undefined") { try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {} }
 
 const fnt = new Font("default");
 const pad = Pads.get(0);
@@ -2039,18 +2070,28 @@ const stalker = {
 
 let entities = [];
 
-let lastRumbleBig = -1;
-let lastRumbleSmall = -1;
+let lastRumbleBig = 0;
+let lastRumbleSmall = 0;
 function triggerRumble(big, small) {
     if (!GAME_SETTINGS.rumble) {
         big = 0;
         small = 0;
     }
     if (big === lastRumbleBig && small === lastRumbleSmall) return;
-    lastRumbleBig = big;
-    lastRumbleSmall = small;
+    // En PS2 real nunca llamar Pads.rumble/padSetActDirect antes de estabilizar SIO2 (frameTick >= 30 y PAD_STATE_STABLE == 6)
+    if (frameTick < 30) {
+        lastRumbleBig = 0;
+        lastRumbleSmall = 0;
+        return;
+    }
     try {
+        if (typeof Pads.getState === "function") {
+            const st = Pads.getState(0);
+            if (st !== 6) return;
+        }
         if (typeof Pads.rumble === "function") {
+            lastRumbleBig = big;
+            lastRumbleSmall = small;
             Pads.rumble(0, big, small);
         }
     } catch (_) {}
@@ -2103,9 +2144,11 @@ function getCompassLabel(ang) {
 }
 
 function isPadDisconnected() {
+    if (frameTick < 60) return false;
     try {
-        if (typeof Pads.isActive === "function") {
-            return !Pads.isActive(0);
+        if (typeof Pads.getState === "function") {
+            const st = Pads.getState(0);
+            return st === 0 || st === 7;
         }
     } catch (_) {}
     return false;
@@ -2189,7 +2232,7 @@ function resetGame() {
 
     showPopup("SECTOR SUBSUELO 04", 90);
     showRadio("OBJETIVO: Activa el Disyuntor rojo, junta 4 Fusibles y escapa al Norte.", 260);
-    triggerRumble(0, 0);
+    if (frameTick >= 30) triggerRumble(0, 0);
 }
 
 resetGame();
@@ -2201,7 +2244,12 @@ Screen.display(() => {
         fnt.scale = Math.fround(0.55);
         fnt.color = rgba(255, 220, 220, 128);
         fnt.print(24, 34, "ERROR EN TIEMPO DE EJECUCION:");
-        fnt.print(24, 64, runtimeErr);
+        fnt.scale = Math.fround(0.46);
+        let ey = 66;
+        for (let off = 0; off < runtimeErr.length && ey < SCREEN_H - 24; off += 54) {
+            fnt.print(24, ey, runtimeErr.slice(off, off + 54));
+            ey += 22;
+        }
         return;
     }
 
@@ -2214,6 +2262,18 @@ Screen.display(() => {
 
         frameTick++;
         pad.update();
+
+        // Primer frame seguro: garantiza salida de video inmediata tras el logo de Athena en PS2 real
+        if (frameTick === 1) {
+            Draw.rect(0, 0, SCREEN_W, SCREEN_H, rgba(8, 6, 10, 128));
+            fnt.scale = Math.fround(0.75);
+            fnt.color = rgba(242, 48, 48, 128);
+            fnt.print(48, (SCREEN_H >> 1) - 24, "SUBSUELO 04");
+            fnt.scale = Math.fround(0.48);
+            fnt.color = rgba(200, 200, 210, 128);
+            fnt.print(48, (SCREEN_H >> 1) + 12, "INICIANDO MOTOR 3D EN PS2...");
+            return;
+        }
 
         if (gameState === STATE_PLAY && isPadDisconnected()) {
             triggerRumble(0, 0);
@@ -2700,4 +2760,3 @@ Screen.display(() => {
         runtimeErr = String(e) + " | " + String(e && e.stack ? e.stack : "").replace(/\n/g, " ");
     }
 });
-

@@ -1,0 +1,7 @@
+# Imágenes ISO y duplicados de compilación
+*.iso
+ATHA_000.01
+
+# Archivos temporales del sistema
+.DS_Store
+Thumbs.db

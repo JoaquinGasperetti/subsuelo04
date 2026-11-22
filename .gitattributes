@@ -1,2 +1,5 @@
-# Auto detect text files and perform LF normalization
 * text=auto
+SYSTEM.CNF text eol=crlf
+athena.ini text eol=crlf
+*.elf binary
+*.wav binary
