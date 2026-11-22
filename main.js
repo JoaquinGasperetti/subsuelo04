@@ -90,6 +90,11 @@ function formatMemoryMB(bytes) {
 function restore2DRenderState(screenW, screenH) {
     if (typeof Screen === "undefined" || typeof Screen.setParam !== "function") return;
     try { if (typeof Screen.DEPTH_TEST_ENABLE !== "undefined") Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {}
+    try {
+        if (typeof Screen.DEPTH_TEST_METHOD !== "undefined" && typeof Screen.DEPTH_ALWAYS !== "undefined") {
+            Screen.setParam(Screen.DEPTH_TEST_METHOD, Screen.DEPTH_ALWAYS);
+        }
+    } catch (_) {}
     try { if (typeof Screen.ALPHA_TEST_ENABLE !== "undefined") Screen.setParam(Screen.ALPHA_TEST_ENABLE, false); } catch (_) {}
     try { if (typeof Screen.DST_ALPHA_TEST_ENABLE !== "undefined") Screen.setParam(Screen.DST_ALPHA_TEST_ENABLE, false); } catch (_) {}
     try {
@@ -1046,12 +1051,12 @@ let mapLoadPhase = 0;
 
 const HW3D_STREAM_STEPS = [
     { kind: "init",    label: "MOTOR 3D (VU1 / CAMARA)" },
-    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "MAPA: PISO" },
-    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "MAPA: TECHO" },
-    { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "MAPA: PAREDES" },
-    { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "MAPA: ESTRUCTURAS" },
-    { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "MAPA: ZONA RITUAL" },
-    { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "MAPA: SALIDA NORTE" },
+    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         clip: true, label: "MAPA: PISO" },
+    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       clip: true, label: "MAPA: TECHO" },
+    { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", clip: true, label: "MAPA: PAREDES" },
+    { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     clip: true, label: "MAPA: ESTRUCTURAS" },
+    { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   clip: true, label: "MAPA: ZONA RITUAL" },
+    { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     clip: true, label: "MAPA: SALIDA NORTE" },
     { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS" },
     { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEMS: FUSIBLES" },
     { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEMS: BATERIAS" },
@@ -1087,7 +1092,7 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (!data) return null;
         if (tex) hwKeptTextures.push(tex);
         hwKeptRenderData.push(data);
-        try { data.accurate_clipping = false; } catch (_) {}
+        try { data.accurate_clipping = !!accurateClip; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try { data.pipeline = Render.PL_DEFAULT; } catch (_) {}
         const obj = new RenderObject(data);
@@ -1238,6 +1243,12 @@ function tickProgressive3DStream() {
                 typeof Camera === "undefined" || typeof Lights === "undefined" ||
                 typeof Image !== "function" || !fileExistsSafe("assets/models/map_floor.obj")) {
                 hwLoadErrorMsg = "API 3D o mapa ausente";
+                hwStreamFailed = true;
+                hw3dReady = false;
+                return;
+            }
+            if (!screenDepthBufferReady) {
+                hwLoadErrorMsg = "Z-buffer no disponible";
                 hwStreamFailed = true;
                 hw3dReady = false;
                 return;
@@ -2303,7 +2314,7 @@ function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities,
     Draw.rect(ox, oy, panelW, panelH, rgba(6, 14, 9, 126));
 
     Draw.rect(ox, oy, panelW, 30, rgba(14, 38, 20, 126));
-    fnt.scale = Math.fround(0.68);
+    fnt.scale = Math.fround(0.72);
     fnt.color = rgba(110, 245, 140, 128);
     fnt.print(ox + 10, oy + 5, "PLANO SUBSUELO 04 [SELECT/L2]");
 
@@ -2357,7 +2368,7 @@ function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities,
     Draw.rect(px - 3, py - 3, 6, 6, rgba(120, 255, 150, 128));
     Draw.line(px, py, px + ((Math.cos(pang) * 14.0) | 0), py + ((Math.sin(pang) * 14.0) | 0), rgba(150, 255, 180, 128));
 
-    fnt.scale = Math.fround(0.62);
+    fnt.scale = Math.fround(0.72);
     fnt.color = rgba(130, 245, 155, 128);
     fnt.print(mx0 + (mapPx >> 1) - 5, my0 - 16, "N");
     fnt.print(mx0 + (mapPx >> 1) - 5, my0 + mapPx + 1, "S");
@@ -2365,7 +2376,7 @@ function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities,
     fnt.print(mx0 + mapPx + 2, my0 + (mapPx >> 1) - 8, "E");
 
     const lx = mx0 + mapPx + 16;
-    fnt.scale = Math.fround(0.64);
+    fnt.scale = Math.fround(0.72);
     fnt.color = rgba(120, 255, 150, 128); fnt.print(lx, my0 + 4,   "TU POSICION");
     fnt.color = rgba(255, 220, 60, 128);  fnt.print(lx, my0 + 32,  "FUSIBLES");
     fnt.color = rgba(255, 75, 75, 128);   fnt.print(lx, my0 + 60,  "DISYUNTOR");
@@ -2901,6 +2912,11 @@ if (screenMode && typeof Screen.setMode === "function") {
 }
 const SCREEN_W = (screenMode && screenMode.width) ? screenMode.width : 640;
 const SCREEN_H = (screenMode && screenMode.height) ? screenMode.height : 448;
+let screenDepthBufferReady = false;
+try {
+    const activeScreenMode = Screen.getMode();
+    screenDepthBufferReady = !!(activeScreenMode && activeScreenMode.zbuffering);
+} catch (_) {}
 const MODE_INFO = {
     vmodeLabel: SCREEN_H >= 500 ? "PAL 50Hz" : "NTSC 60Hz"
 };
