@@ -197,19 +197,48 @@ let audioPlaying = false;
 let lastAppliedVol = -1;
 
 let audioInitAttempted = false;
+let iopAudioLoaded = false;
+
+function ensureAudioIOP() {
+    if (iopAudioLoaded) return;
+    iopAudioLoaded = true;
+    try {
+        if (typeof IOP !== "undefined" && IOP && typeof IOP.getModule === "function" && typeof IOP.loadModule === "function") {
+            const sd = IOP.getModule("libsd");
+            if (sd) {
+                try { IOP.loadModule(sd); } catch (_) {}
+            }
+            const au = IOP.getModule("audsrv");
+            if (au) {
+                try { IOP.loadModule(au); } catch (_) {}
+            }
+        }
+    } catch (_) {}
+}
+
+function resolveAudioPath() {
+    if (typeof std !== "undefined" && std && typeof std.exists === "function") {
+        if (std.exists("assets/ambient.ogg")) return "assets/ambient.ogg";
+        if (std.exists("assets/ambient.wav")) return "assets/ambient.wav";
+        return null;
+    }
+    return "assets/ambient.ogg";
+}
+
 function initAudio() {
     if (audioReady && ambientStream) return true;
     if (audioInitAttempted) return false;
     audioInitAttempted = true;
     try {
         if (typeof Sound === "undefined" || !Sound || typeof Sound.Stream !== "function") return false;
-        if (typeof std !== "undefined" && std && typeof std.exists === "function") {
-            if (!std.exists("assets/ambient.wav")) return false;
-        }
-        ambientStream = new Sound.Stream("assets/ambient.wav");
+        const audioPath = resolveAudioPath();
+        if (!audioPath) return false;
+        ensureAudioIOP();
+        ambientStream = new Sound.Stream(audioPath);
         if (ambientStream) {
             try { ambientStream.loop = true; } catch (_) {}
             audioReady = true;
+            audioPlaying = false;
             lastAppliedVol = -1;
             applyAudioVolume(GAME_SETTINGS.audioVolume);
             return true;
@@ -228,18 +257,21 @@ function applyAudioVolume(vol) {
     lastAppliedVol = clamped;
     if (!audioReady || !ambientStream) return;
     try {
-        if (typeof Sound.setVolume === "function") {
-            Sound.setVolume(clamped);
-        }
         if (clamped === 0) {
             if (audioPlaying && typeof ambientStream.pause === "function") {
                 ambientStream.pause();
                 audioPlaying = false;
             }
+            if (typeof Sound.setVolume === "function") {
+                Sound.setVolume(0);
+            }
         } else {
             if (!audioPlaying && typeof ambientStream.play === "function") {
                 ambientStream.play();
                 audioPlaying = true;
+            }
+            if (typeof Sound.setVolume === "function") {
+                Sound.setVolume(clamped);
             }
         }
     } catch (_) {}
@@ -1852,7 +1884,7 @@ function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
     fnt.scale = Math.fround(0.47);
     fnt.color = COL_CYAN;
     fnt.print(px + 22, py + 216, ["Modo de video: ", String(screenW), "x", String(screenH), " (", modeInfo.vmodeLabel, ")"].join(""));
-    fnt.print(px + 22, py + 240, isAudioReady() ? "Audio PS2 (audsrv): ACTIVO (ambient.wav)" : "Audio PS2 (audsrv): INACTIVO");
+    fnt.print(px + 22, py + 240, isAudioReady() ? "Audio PS2 (audsrv): ACTIVO (ambient.ogg)" : "Audio PS2 (audsrv): INACTIVO");
     fnt.print(px + 22, py + 264, RECORDS.mcAvailable ? "Memory Card (mc0):  DISPONIBLE" : "Memory Card (mc0):  NO DETECTADA");
     fnt.print(px + 22, py + 288, ["Escapes totales: ", String(RECORDS.escapes)].join(""));
 

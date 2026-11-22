@@ -12,7 +12,7 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 ├── title.cfg        # Lanzador para la pestaña APPS de OPL
 ├── SYSTEM.CNF       # Descriptor de arranque para DVD-R / ISO (CRLF)
 └── assets/
-    └── ambient.wav  # Audio ambiental opcional (audsrv)
+    └── ambient.ogg  # Audio ambiental opcional (audsrv)
 ```
 
 ## Compatibilidad y optimizaciones para PS2 real
