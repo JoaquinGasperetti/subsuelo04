@@ -888,11 +888,225 @@ for (let i = 0; i < MAX_DRAW_ENTITIES; i++) {
 
 const renderStats = { cols: 0, minD: 99.0, maxD: 0.0, wallMode: 0, numRays: 128 };
 
+
+// ============================================================================
+// MOTOR 3D REAL POR HARDWARE PS2 (VU1 + VU0 + GS via AthenaEnv V4)
+// Escala real: 1 celda del mapa = 2.0 m, techo = 2.6 m, ojos = 1.55 m
+// Soporta automaticamente assets/models/stalker.glb cuando lo agregues
+// ============================================================================
+const WORLD_CELL_SIZE = 2.0;
+const WORLD_EYE_H = 1.55;
+
+let hw3dAttempted = false;
+let hw3dReady = false;
+let hw3dLastWide = null;
+let hwLightMain = -1;
+let hwLightFill = -1;
+let hwStaticObjs = [];
+let hwGatesObj = null;
+let hwPropObjs = {};
+let hwStalkerObj = null;
+let hwStalkerIsGltf = false;
+
+function loadHwMesh(objPath, texPath) {
+    if (!fileExistsSafe(objPath)) return null;
+    try {
+        let tex = null;
+        if (texPath && fileExistsSafe(texPath)) {
+            tex = new Image(texPath);
+        }
+        const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
+        if (!data) return null;
+        try { data.accurate_clipping = true; } catch (_) {}
+        try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
+        try { data.pipeline = Render.PL_DEFAULT; } catch (_) {}
+        const obj = new RenderObject(data);
+        if (obj) {
+            obj.position = { x: 0.0, y: 0.0, z: 0.0 };
+            obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
+        }
+        return obj;
+    } catch (_) {
+        return null;
+    }
+}
+
+function updateHw3dProjection() {
+    const isWide = !!GAME_SETTINGS.aspect16x9;
+    if (hw3dLastWide === isWide) return;
+    hw3dLastWide = isWide;
+    try {
+        // FOV vertical equilibrado (54 deg en 4:3, 62 deg en 16:9) sin mareo en esquinas
+        Render.setView(isWide ? 62.0 : 54.0, 0.25, 36.0);
+    } catch (_) {}
+}
+
+function initHardware3D() {
+    if (hw3dReady) return true;
+    if (hw3dAttempted) return false;
+    hw3dAttempted = true;
+    try {
+        if (typeof Render === "undefined" || typeof RenderData !== "function" ||
+            typeof RenderObject !== "function" || typeof Camera === "undefined" ||
+            typeof Lights === "undefined" || typeof Image !== "function") {
+            return false;
+        }
+        if (!fileExistsSafe("assets/models/map_floor.obj")) return false;
+
+        try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
+        updateHw3dProjection();
+        Camera.type(Camera.LOOKAT);
+
+        hwLightMain = Lights.new();
+        hwLightFill = Lights.new();
+        Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
+        Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
+        Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
+
+        const staticSpecs = [
+            ["assets/models/map_floor.obj",          "assets/textures/floor.png"],
+            ["assets/models/map_ceiling.obj",        "assets/textures/ceiling.png"],
+            ["assets/models/map_walls_concrete.obj", "assets/textures/wall_concrete.png"],
+            ["assets/models/map_walls_rust.obj",     "assets/textures/wall_rust.png"],
+            ["assets/models/map_walls_ritual.obj",   "assets/textures/wall_ritual.png"],
+            ["assets/models/map_exit.obj",           "assets/textures/exit_door.png"]
+        ];
+        hwStaticObjs = [];
+        for (let i = 0; i < staticSpecs.length; i++) {
+            const o = loadHwMesh(staticSpecs[i][0], staticSpecs[i][1]);
+            if (o) hwStaticObjs.push(o);
+        }
+        if (hwStaticObjs.length < 3) return false;
+
+        hwGatesObj = loadHwMesh("assets/models/map_gates.obj", "assets/textures/gate.png");
+
+        hwPropObjs.fuse    = loadHwMesh("assets/models/fuse.obj",    "assets/textures/fuse.png");
+        hwPropObjs.battery = loadHwMesh("assets/models/battery.obj", "assets/textures/battery.png");
+        hwPropObjs.breaker = loadHwMesh("assets/models/breaker.obj", "assets/textures/breaker.png");
+        hwPropObjs.note    = loadHwMesh("assets/models/note.obj",    "assets/textures/note.png");
+
+        // Carga automaticamente assets/models/stalker.glb si ya lo agregaste; sino usa placeholder 3D
+        if (fileExistsSafe("assets/models/stalker.glb")) {
+            hwStalkerObj = loadHwMesh("assets/models/stalker.glb", null);
+            hwStalkerIsGltf = !!hwStalkerObj;
+        }
+        if (!hwStalkerObj) {
+            hwStalkerObj = loadHwMesh("assets/models/stalker_placeholder.obj", "assets/textures/stalker.png");
+            hwStalkerIsGltf = false;
+        }
+
+        hw3dReady = true;
+        return true;
+    } catch (_) {
+        hw3dReady = false;
+        return false;
+    }
+}
+
+function renderHardware3DWorld(
+    screenW, screenH, player, stalker, entities,
+    dangerRatio, frameTick, exitUnlocked, flashIntensity, mapAnim, sideBias
+) {
+    updateHw3dProjection();
+
+    const px = toF64(player.x);
+    const py = toF64(player.y);
+    const pang = toF64(player.ang);
+    const pbob = toF64(player.bobPhase);
+    const pbat = toF64(player.battery);
+    const dRatio = toF64(dangerRatio);
+    const fInt = toF64(flashIntensity);
+    const mAnim = toF64(mapAnim);
+    const sBias = toF64(sideBias);
+
+    const dirX = toF64(Math.cos(pang));
+    const dirZ = toF64(Math.sin(pang));
+    const camX = px * WORLD_CELL_SIZE;
+    const camZ = py * WORLD_CELL_SIZE;
+
+    Camera.position(camX, WORLD_EYE_H, camZ);
+    Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
+    Camera.update();
+
+    const flashActive = player.flashlightOn && ((pbat - 0.0) > 0);
+    const lowFlicker = (flashActive && ((pbat - 24.0) < 0) && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.30 : 1.0;
+    const effFlash = toF64(flashActive ? (fInt * lowFlicker) : 0.0);
+
+    // Luz principal dinámica alineada con la linterna del jugador + tinte rojo por cercanía del Acechador
+    const lPow = 0.22 + effFlash * 0.92;
+    const redTint = dRatio * 0.38;
+    Lights.set(hwLightMain, Lights.DIRECTION, -dirX, -0.22, -dirZ);
+    Lights.set(hwLightMain, Lights.AMBIENT, 0.14 + redTint * 0.35, 0.15, 0.18);
+    Lights.set(hwLightMain, Lights.DIFFUSE, Math.min(1.2, lPow + redTint), lPow * 0.96, lPow * 0.90);
+
+    // 1. Escenario estático 3D por hardware (piso, techo, paredes, salida)
+    for (let i = 0; i < hwStaticObjs.length; i++) {
+        hwStaticObjs[i].render();
+    }
+    // 2. Rejas 3D (desaparecen al activar el Disyuntor)
+    if (hwGatesObj && !breakerActive) {
+        hwGatesObj.render();
+    }
+
+    // 3. Ítems 3D flotando y girando suavemente
+    const spinY = toF64(frameTick * 0.03);
+    const bobY = toF64(Math.sin(frameTick * 0.08) * 0.08);
+    for (let i = 0; i < entities.length; i++) {
+        const e = entities[i];
+        if (e.taken) continue;
+        const prop = hwPropObjs[e.kind];
+        if (!prop) continue;
+        const ex = toF64(e.x) * WORLD_CELL_SIZE;
+        const ez = toF64(e.y) * WORLD_CELL_SIZE;
+        let ey = 0.55 + bobY;
+        if (e.kind === "breaker") ey = 0.0;
+        else if (e.kind === "note") ey = 0.04;
+        prop.position = { x: ex, y: ey, z: ez };
+        prop.rotation = { x: 0.0, y: (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY, z: 0.0 };
+        prop.render();
+    }
+
+    // 4. El Acechador en 3D (stalker.glb si existe, o placeholder 3D)
+    if (hwStalkerObj) {
+        const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
+        const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
+        const faceAng = Math.atan2(camX - sx, camZ - sz);
+        hwStalkerObj.position = { x: sx, y: 0.0, z: sz };
+        hwStalkerObj.rotation = { x: 0.0, y: faceAng, z: 0.0 };
+        hwStalkerObj.render();
+    }
+
+    // 5. Linterna en mano (viewmodel 2D) y viñeta sutil
+    const enableBob = GAME_SETTINGS.bob;
+    const vmBobOffset = enableBob ? ((Math.sin(pbob) * 3.0) | 0) : 0;
+    const vmSwayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 2.0) | 0) : 0;
+    if (GAME_SETTINGS.viewmodel) {
+        renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, vmBobOffset, vmSwayOffset, mAnim, frameTick);
+    }
+    if (GAME_SETTINGS.overlays && (dRatio - 0.22) > 0) {
+        const absBias = sBias < 0 ? -sBias : sBias;
+        if ((absBias - 0.18) > 0) {
+            let edgeAlpha = (dRatio * absBias * 84.0) | 0;
+            if (edgeAlpha > 88) edgeAlpha = 88;
+            const edgeCol = rgba(220, 18, 22, edgeAlpha);
+            if (sBias < 0) Draw.rect(0, 0, 22, screenH, edgeCol);
+            else Draw.rect(screenW - 22, 0, 22, screenH, edgeCol);
+        }
+    }
+}
+
 function render3DWorld(
     screenW, screenH, grid, player, stalker, entities,
     dangerRatio, frameTick, exitUnlocked, fov, flashIntensity,
     mapAnim = 0.0, sideBias = 0.0
 ) {
+    if (hw3dReady) {
+        renderHardware3DWorld(
+            screenW, screenH, player, stalker, entities,
+            dangerRatio, frameTick, exitUnlocked, flashIntensity, mapAnim, sideBias
+        );
+        return;
+    }
     const qIdx = (gameState === STATE_PLAY) ? GAME_SETTINGS.qualityIndex : 2;
     const qTable = QUALITY_TABLES[qIdx] || QUALITY_TABLES[1];
     const numRays = qTable.numRays;
@@ -2014,7 +2228,7 @@ function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
     fnt.color = COL_WHITE;
     fnt.print(px + 22, py + 84,  "Diseno y Desarrollo: Joaquin Gasperetti");
     fnt.print(px + 22, py + 112, "Motor Runtime PS2:   AthenaEnv V4 (QuickJS + GS)");
-    fnt.print(px + 22, py + 140, "Render 3D:           Raycaster DDA + Span Batching Gouraud");
+    fnt.print(px + 22, py + 140, "Render 3D:           PS2 VU1 + GS Hardware 3D (AthenaEnv V4)");
 
     Draw.rect(px + 20, py + 174, panelW - 40, 1, rgba(70, 50, 55, 110));
 
@@ -2495,8 +2709,11 @@ Screen.display(() => {
             fnt.print(48, (SCREEN_H >> 1) - 24, "SUBSUELO 04");
             fnt.scale = Math.fround(0.48);
             fnt.color = rgba(200, 200, 210, 128);
-            fnt.print(48, (SCREEN_H >> 1) + 12, "INICIANDO MOTOR 3D EN PS2...");
+            fnt.print(48, (SCREEN_H >> 1) + 12, "CARGANDO MOTOR 3D VU1 EN PS2...");
             return;
+        }
+        if (frameTick === 2 && !hw3dAttempted) {
+            initHardware3D();
         }
 
         if (gameState === STATE_PLAY && isPadDisconnected()) {
