@@ -460,46 +460,46 @@ function isPosWalkable(grid, nx, ny, margin = 0.25) {
 const LORE_NOTES = [
     {
         code: "REGISTRO #01 - INGENIERIA",
-        summary: "El disyuntor central corta las rejas de los sectores Este y Oeste.",
+        summary: "El disyuntor central abre las rejas Este y Oeste.",
         lines: [
-            "FECHA: 14/10 - TURNO NOCHE (SUBSUELO 04)",
-            "Tras el apagon se cerraron las rejas de contencion",
+            "14/10 - TURNO NOCHE (SUBSUELO 04)",
+            "Tras el apagon se trabaron las rejas",
             "hacia los sectores Este y Oeste.",
-            "El DISYUNTOR ROJO en el nucleo central libera",
-            "las trabas magneticas. Si bajas, ve directo alli."
+            "El DISYUNTOR ROJO en el centro libera",
+            "las trabas magneticas. Ve directo alli."
         ]
     },
     {
         code: "REGISTRO #02 - SEGURIDAD",
-        summary: "No corras cerca suyo. Apaga la linterna y quedate quieto para esconderte.",
+        summary: "No corras cerca suyo. Apaga la linterna para ocultarte.",
         lines: [
-            "INFORME DE GUARDIA - ANOMALIA EN PASILLO SUR",
-            "Esa cosa reacciona al ruido de pisadas rapidas",
-            "y al haz directo de nuestras linternas tacticas.",
-            "Si sientes el pulso dispararse, apaga la luz [TRIANGULO]",
-            "y evita correr: en la oscuridad pierde tu rastro."
+            "INFORME DE GUARDIA - PASILLO SUR",
+            "Reacciona al ruido de pisadas rapidas",
+            "y al haz directo de las linternas.",
+            "Si sube tu pulso, apaga la luz [TRIANG]",
+            "y deja de correr: perdera tu rastro."
         ]
     },
     {
         code: "REGISTRO #03 - PROTOCOLO",
-        summary: "Si te mira de frente, ilumina sus ojos para frenar su avance.",
+        summary: "Ilumina sus ojos de frente para frenar su avance.",
         lines: [
-            "OBSERVACION DE CAMPO - COMPORTAMIENTO VISUAL",
-            "Aunque la luz lo atrae desde lejos, el haz concentrado",
-            "directo en sus ojos lo desorienta por unos segundos.",
-            "Usalo solo para ganar distancia cuando te acorrale",
-            "en un pasillo estrecho. Cuida la bateria."
+            "OBSERVACION - COMPORTAMIENTO VISUAL",
+            "Aunque la luz lo atrae desde lejos,",
+            "apuntar directo a sus ojos lo frena.",
+            "Usalo solo para ganar distancia si te",
+            "acorrala en un pasillo. Cuida bateria."
         ]
     },
     {
         code: "REGISTRO #04 - EVACUACION",
-        summary: "Los 4 fusibles alimentan la compuerta de evacuacion al Norte.",
+        summary: "Los 4 fusibles abren la compuerta de salida al Norte.",
         lines: [
-            "ORDEN DE EMERGENCIA - COMPUERTA NORTE",
-            "La salida blindada al Norte (arriba en el plano PDA)",
-            "requiere los 4 FUSIBLES industriales de respaldo.",
-            "Cuando el panel pase a VERDE, corre hacia la compuerta.",
-            "No mires atras."
+            "ORDEN DE EMERGENCIA - SALIDA NORTE",
+            "La compuerta blindada al Norte (arriba",
+            "en el PDA) requiere los 4 FUSIBLES.",
+            "Cuando el panel pase a VERDE, corre",
+            "hacia la salida. No mires atras."
         ]
     }
 ];
@@ -907,11 +907,11 @@ let hwGatesObj = null;
 let hwPropObjs = {};
 let hwStalkerObj = null;
 let hwStalkerIsGltf = false;
+let hwStalkerSource = "NONE";
 
 // ============================================================================
-// ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO DURANTE EL JUEGO
-// Evita cargar todo en VRAM/RAM de golpe al iniciar; streamea 1 malla cada 18 cuadros
-// mientras ya estas jugando, con culling por distancia para cuidar VU1 y GS VRAM (4 MB).
+// ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO (TITULO Y PARTIDA)
+// Compatible con athena.elf con o sin Render.init()/Render.begin().
 // ============================================================================
 let bootLoadStep = 0;
 let bootLoadPhase = 0;
@@ -919,10 +919,10 @@ let bootLoadDone = false;
 let bootSkipAudio = false;
 
 const BOOT_LOAD_STEPS = [
-    { kind: "audio_iop",   label: "AUDIO: MODULOS IOP (libsd / audsrv)" },
-    { kind: "audio_amb",   label: "AUDIO: STREAM (ambient.wav)" },
-    { kind: "audio_chase", label: "AUDIO: STREAM (chase.wav)" },
-    { kind: "audio_play",  label: "ENTRANDO AL MENU PRINCIPAL..." }
+    { kind: "audio_iop",   label: "AUDIO: MODULOS IOP" },
+    { kind: "audio_amb",   label: "AUDIO: ambient.wav" },
+    { kind: "audio_chase", label: "AUDIO: chase.wav" },
+    { kind: "audio_play",  label: "ENTRANDO AL MENU..." }
 ];
 
 const BOOT_PCT_LABELS = [
@@ -930,38 +930,46 @@ const BOOT_PCT_LABELS = [
 ];
 const LOAD_SPINNERS = ["|", "/", "-", "\\"];
 
-// Cola de streaming 3D progresivo durante STATE_PLAY (1 recurso cada ~18 frames)
+// Carga progresiva 3D en pantalla de carga dedicada (entre Menu Principal y Partida)
 let hwStreamStep = 0;
 let hwRenderInitDone = false;
-let hwStreamCooldown = 12;
+let hwStreamCooldown = 4;
 let hwStreamDone = false;
 let hwStreamFailed = false;
 let hwLoadErrorMsg = "";
+let mapLoadPhase = 0;
 
 const HW3D_STREAM_STEPS = [
-    { kind: "init",    label: "3D: VU1/CAMARA" },
-    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "3D: PISO" },
-    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "3D: TECHO" },
-    { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "3D: PAREDES" },
-    { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "3D: OXIDO" },
-    { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "3D: RITUAL" },
-    { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "3D: SALIDA" },
-    { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "3D: REJAS" },
-    { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "3D: FUSIBLES" },
-    { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "3D: BATERIAS" },
-    { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "3D: DISYUNTOR" },
-    { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "3D: NOTAS" },
-    { kind: "stalker", obj: "assets/models/stalker.obj",            tex: "assets/textures/stalker.png",       label: "3D: ACECHADOR" }
+    { kind: "init",    label: "MOTOR 3D (VU1 / CAMARA)" },
+    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         label: "MAPA: PISO" },
+    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       label: "MAPA: TECHO" },
+    { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", label: "MAPA: PAREDES" },
+    { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     label: "MAPA: ESTRUCTURAS" },
+    { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   label: "MAPA: ZONA RITUAL" },
+    { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     label: "MAPA: SALIDA NORTE" },
+    { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS" },
+    { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEMS: FUSIBLES" },
+    { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEMS: BATERIAS" },
+    { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEMS: DISYUNTOR" },
+    { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEMS: NOTAS" },
+    { kind: "stalker", obj: "assets/models/stalker.obj",            tex: "assets/textures/stalker.png",       label: "ENEMIGO: EL ACECHADOR" }
+];
+
+const MAP_PCT_LABELS = [
+    "0%   (0/13)",  "8%   (1/13)",  "15%  (2/13)",  "23%  (3/13)",
+    "31%  (4/13)",  "38%  (5/13)",  "46%  (6/13)",  "54%  (7/13)",
+    "62%  (8/13)",  "69%  (9/13)",  "77%  (10/13)", "85%  (11/13)",
+    "92%  (12/13)", "100% (13/13)"
 ];
 
 const STREAM_3D_BADGES = [
-    "CARGANDO 3D: 0/13",  "CARGANDO 3D: 1/13",  "CARGANDO 3D: 2/13",  "CARGANDO 3D: 3/13",
-    "CARGANDO 3D: 4/13",  "CARGANDO 3D: 5/13",  "CARGANDO 3D: 6/13",  "CARGANDO 3D: 7/13",
-    "CARGANDO 3D: 8/13",  "CARGANDO 3D: 9/13",  "CARGANDO 3D: 10/13", "CARGANDO 3D: 11/13",
-    "CARGANDO 3D: 12/13", "3D VU1 LISTO"
+    "3D: 0/13",  "3D: 1/13",  "3D: 2/13",  "3D: 3/13",
+    "3D: 4/13",  "3D: 5/13",  "3D: 6/13",  "3D: 7/13",
+    "3D: 8/13",  "3D: 9/13",  "3D: 10/13", "3D: 11/13",
+    "3D: 12/13", "3D VU1 LISTO"
 ];
 
-function loadHwMesh(objPath, texPath) {
+function loadHwMesh(objPath, texPath, accurateClip = false) {
     if (!fileExistsSafe(objPath)) return null;
     try {
         let tex = null;
@@ -983,16 +991,30 @@ function loadHwMesh(objPath, texPath) {
         }
         return obj;
     } catch (e) {
-        hwLoadErrorMsg = e ? String(e) : "Error de carga 3D";
+        hwLoadErrorMsg = e ? String(e) : "Error carga 3D";
         return null;
     }
 }
 
 function loadHwStalker(objPath, texPath) {
     hwStalkerIsGltf = false;
-    let obj = loadHwMesh(objPath, texPath);
-    if (!obj) {
-        obj = loadHwMesh("assets/models/stalker_placeholder.obj", texPath);
+    hwStalkerSource = "NONE";
+    let obj = loadHwMesh(objPath, texPath, false);
+    if (obj) {
+        hwStalkerSource = "OBJ";
+        return obj;
+    }
+    if (fileExistsSafe("assets/models/stalker.glb")) {
+        obj = loadHwMesh("assets/models/stalker.glb", null, false);
+        if (obj) {
+            hwStalkerIsGltf = true;
+            hwStalkerSource = "GLB";
+            return obj;
+        }
+    }
+    obj = loadHwMesh("assets/models/stalker_placeholder.obj", texPath, false);
+    if (obj) {
+        hwStalkerSource = "PROXY";
     }
     return obj;
 }
@@ -1002,8 +1024,10 @@ function updateHw3dProjection() {
     if (hw3dLastWide === isWide) return;
     hw3dLastWide = isWide;
     try {
-        Render.setView(isWide ? 62.0 : 54.0, 0.5, 50.0);
-    } catch (_) {}
+        Render.setView(isWide ? 60.0 : 54.0, 1.0, 2000.0);
+    } catch (e) {
+        hwLoadErrorMsg = e ? String(e) : "Error Render.setView";
+    }
 }
 
 function stepBootLoad() {
@@ -1078,8 +1102,8 @@ function tickProgressive3DStream() {
         hwStreamCooldown--;
         return;
     }
-    // Espaciar cada carga 18 cuadros (~0.3s) para no trabar la partida ni saturar el USB 1.1
-    hwStreamCooldown = 18;
+    // Espaciar cada carga 10 cuadros (~0.17s) para streaming seguro en USB 1.1
+    hwStreamCooldown = 10;
 
     const total = HW3D_STREAM_STEPS.length;
     if (hwStreamStep >= total) {
@@ -1091,27 +1115,25 @@ function tickProgressive3DStream() {
     try {
         if (step.kind === "init") {
             hw3dAttempted = true;
-            if (typeof Render === "undefined" || typeof RenderData !== "function" ||
-                typeof RenderObject !== "function" || typeof Camera === "undefined" ||
-                typeof Lights === "undefined" || typeof Image !== "function" ||
-                !fileExistsSafe("assets/models/map_floor.obj")) {
+            if (typeof Render === "undefined" || typeof Render.setView !== "function" ||
+                typeof RenderData !== "function" || typeof RenderObject !== "function" ||
+                typeof Camera === "undefined" || typeof Lights === "undefined" ||
+                typeof Image !== "function" || !fileExistsSafe("assets/models/map_floor.obj")) {
+                hwLoadErrorMsg = "API 3D o mapa ausente";
                 hwStreamFailed = true;
                 hw3dReady = false;
                 return;
             }
             try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
-            // OBLIGATORIO en AthenaEnv: Render.init() registra las matrices de la camara y carga
-            // los microprogramas VU1. Sin esto Camera.update() y render() cuelgan la PS2 real.
+            // En builds recientes de AthenaEnv existe Render.init(); en el athena.elf del repo
+            // la inicializacion 3D VU1 la realiza directamente Render.setView().
             if (!hwRenderInitDone) {
-                if (typeof Render.init !== "function") {
-                    hwLoadErrorMsg = "Render.init no existe";
-                    hwStreamFailed = true;
-                    hw3dReady = false;
-                    return;
+                if (typeof Render.init === "function") {
+                    Render.init();
                 }
-                Render.init();
                 hwRenderInitDone = true;
             }
+            hw3dLastWide = null;
             updateHw3dProjection();
             if (typeof Camera.type === "function" && typeof Camera.LOOKAT !== "undefined") {
                 Camera.type(Camera.LOOKAT);
@@ -1136,19 +1158,21 @@ function tickProgressive3DStream() {
             } catch (_) {}
             hwStaticObjs = [];
         } else if (step.kind === "static") {
-            const o = loadHwMesh(step.obj, step.tex);
+            const o = loadHwMesh(step.obj, step.tex, !!step.clip);
             if (o) hwStaticObjs.push(o);
-            // Apenas cargan piso, techo, hormigon y oxido (4 mallas base), activa el 3D VU1!
+            if (hwStaticObjs.length >= 4 && hwStalkerObj) {
+                hw3dReady = true;
+            }
+        } else if (step.kind === "stalker") {
+            hwStalkerObj = loadHwStalker(step.obj, step.tex);
             if (hwStaticObjs.length >= 4) {
                 hw3dReady = true;
             }
         } else if (step.kind === "gates") {
-            hwGatesObj = loadHwMesh(step.obj, step.tex);
+            hwGatesObj = loadHwMesh(step.obj, step.tex, true);
         } else if (step.kind === "prop") {
-            const o = loadHwMesh(step.obj, step.tex);
+            const o = loadHwMesh(step.obj, step.tex, false);
             if (o) hwPropObjs[step.key] = o;
-        } else if (step.kind === "stalker") {
-            hwStalkerObj = loadHwStalker(step.obj, step.tex);
         }
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error stream 3D";
@@ -1160,14 +1184,15 @@ function tickProgressive3DStream() {
     hwStreamStep++;
     if (hwStreamStep >= total) {
         hwStreamDone = true;
+        if (hwStaticObjs.length > 0) hw3dReady = true;
     }
 }
 
 function drawLoadingScreen(screenW, screenH, fnt) {
     Draw.rect(0, 0, screenW, screenH, rgba(7, 6, 10, 128));
 
-    const panelW = Math.min(540, screenW - 56);
-    const panelH = 236;
+    const panelW = Math.min(548, screenW - 48);
+    const panelH = 264;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
@@ -1177,18 +1202,18 @@ function drawLoadingScreen(screenW, screenH, fnt) {
     Draw.rect(px, py, 2, panelH, rgba(95, 25, 32, 128));
     Draw.rect(px + panelW - 2, py, 2, panelH, rgba(95, 25, 32, 128));
 
-    fnt.scale = Math.fround(0.95);
+    fnt.scale = Math.fround(1.0);
     fnt.color = rgba(242, 48, 48, 128);
-    fnt.print(px + 24, py + 18, "SUBSUELO 04");
+    fnt.print(px + 24, py + 16, "SUBSUELO 04");
 
-    fnt.scale = Math.fround(0.54);
-    fnt.color = rgba(190, 195, 210, 128);
-    fnt.print(px + 24, py + 56, "INICIANDO SISTEMA PS2 (3D EN STREAMING)");
+    fnt.scale = Math.fround(0.72);
+    fnt.color = rgba(205, 210, 224, 128);
+    fnt.print(px + 24, py + 56, "INICIANDO SISTEMA PS2");
 
     const total = BOOT_LOAD_STEPS.length;
     const clampedStep = bootLoadStep < 0 ? 0 : (bootLoadStep > total ? total : bootLoadStep);
     const barX = px + 24;
-    const barY = py + 90;
+    const barY = py + 94;
     const barW = panelW - 48;
     const barH = 28;
     const fillW = ((barW * clampedStep) / total) | 0;
@@ -1200,17 +1225,17 @@ function drawLoadingScreen(screenW, screenH, fnt) {
         Draw.rect(barX, barY, fillW, 5, rgba(255, 110, 95, 128));
     }
 
-    fnt.scale = Math.fround(0.60);
+    fnt.scale = Math.fround(0.74);
     fnt.color = rgba(255, 232, 160, 128);
     fnt.print(barX, barY + 38, BOOT_PCT_LABELS[clampedStep] || "0%   (0/4)");
 
     const spinIdx = ((frameTick >> 2) & 3);
-    fnt.scale = Math.fround(0.60);
+    fnt.scale = Math.fround(0.74);
     fnt.color = rgba(110, 230, 255, 128);
-    fnt.print(barX + barW - 108, barY + 38, "ACTIVO");
-    fnt.print(barX + barW - 20, barY + 38, LOAD_SPINNERS[spinIdx]);
+    fnt.print(barX + barW - 122, barY + 38, "ACTIVO");
+    fnt.print(barX + barW - 22, barY + 38, LOAD_SPINNERS[spinIdx]);
 
-    const scanY = barY + 66;
+    const scanY = barY + 72;
     const scanW = 54;
     const scanMax = barW - scanW;
     const cycle = (frameTick * 6) % (scanMax * 2);
@@ -1219,13 +1244,85 @@ function drawLoadingScreen(screenW, screenH, fnt) {
     Draw.rect(barX + scanOff, scanY, scanW, 5, rgba(90, 220, 255, 128));
 
     const curStep = BOOT_LOAD_STEPS[clampedStep < total ? clampedStep : (total - 1)];
-    fnt.scale = Math.fround(0.50);
-    fnt.color = rgba(235, 238, 245, 128);
-    fnt.print(barX, barY + 84, curStep ? curStep.label : "LISTO");
+    fnt.scale = Math.fround(0.72);
+    fnt.color = rgba(238, 240, 248, 128);
+    fnt.print(barX, barY + 88, curStep ? curStep.label : "LISTO");
 
-    fnt.scale = Math.fround(0.45);
-    fnt.color = rgba(160, 170, 185, 128);
-    fnt.print(barX, py + panelH - 26, "[CIRCULO] ENTRAR SIN AUDIO");
+    fnt.scale = Math.fround(0.70);
+    fnt.color = rgba(185, 195, 212, 128);
+    fnt.print(barX, py + panelH - 34, "[CIRCULO] ENTRAR SIN AUDIO");
+}
+
+function stepOneMapLoad() {
+    if (hwStreamDone || hwStreamFailed) return true;
+    hwStreamCooldown = 0;
+    tickProgressive3DStream();
+    return hwStreamDone || hwStreamFailed;
+}
+
+function drawMapLoadingScreen(screenW, screenH, fnt) {
+    Draw.rect(0, 0, screenW, screenH, rgba(6, 5, 10, 128));
+
+    const panelW = Math.min(548, screenW - 48);
+    const panelH = 268;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    Draw.rect(px, py, panelW, panelH, rgba(16, 14, 22, 124));
+    Draw.rect(px, py, panelW, 3, rgba(215, 38, 38, 128));
+    Draw.rect(px, py + panelH - 2, panelW, 2, rgba(95, 25, 32, 128));
+    Draw.rect(px, py, 2, panelH, rgba(95, 25, 32, 128));
+    Draw.rect(px + panelW - 2, py, 2, panelH, rgba(95, 25, 32, 128));
+
+    fnt.scale = Math.fround(0.95);
+    fnt.color = rgba(242, 48, 48, 128);
+    fnt.print(px + 24, py + 16, "CARGANDO SUBSUELO 04");
+
+    fnt.scale = Math.fround(0.72);
+    fnt.color = rgba(205, 210, 224, 128);
+    fnt.print(px + 24, py + 54, "PREPARANDO ESCENARIO 3D VU1...");
+
+    const total = HW3D_STREAM_STEPS.length;
+    const clampedStep = hwStreamStep < 0 ? 0 : (hwStreamStep > total ? total : hwStreamStep);
+    const barX = px + 24;
+    const barY = py + 92;
+    const barW = panelW - 48;
+    const barH = 28;
+    const fillW = ((barW * clampedStep) / total) | 0;
+
+    Draw.rect(barX - 2, barY - 2, barW + 4, barH + 4, rgba(130, 45, 55, 128));
+    Draw.rect(barX, barY, barW, barH, rgba(24, 22, 32, 128));
+    if (fillW > 0) {
+        Draw.rect(barX, barY, fillW, barH, rgba(210, 34, 42, 128));
+        Draw.rect(barX, barY, fillW, 5, rgba(255, 110, 95, 128));
+    }
+
+    fnt.scale = Math.fround(0.74);
+    fnt.color = rgba(255, 232, 160, 128);
+    fnt.print(barX, barY + 38, MAP_PCT_LABELS[clampedStep] || "0%   (0/13)");
+
+    const spinIdx = ((frameTick >> 2) & 3);
+    fnt.scale = Math.fround(0.74);
+    fnt.color = rgba(110, 230, 255, 128);
+    fnt.print(barX + barW - 122, barY + 38, "CARGANDO");
+    fnt.print(barX + barW - 22, barY + 38, LOAD_SPINNERS[spinIdx]);
+
+    const scanY = barY + 72;
+    const scanW = 54;
+    const scanMax = barW - scanW;
+    const cycle = (frameTick * 6) % (scanMax * 2);
+    const scanOff = cycle <= scanMax ? cycle : (scanMax * 2 - cycle);
+    Draw.rect(barX, scanY, barW, 5, rgba(32, 36, 48, 128));
+    Draw.rect(barX + scanOff, scanY, scanW, 5, rgba(90, 220, 255, 128));
+
+    const curStep = HW3D_STREAM_STEPS[clampedStep < total ? clampedStep : (total - 1)];
+    fnt.scale = Math.fround(0.72);
+    fnt.color = rgba(238, 240, 248, 128);
+    fnt.print(barX, barY + 88, curStep ? curStep.label : "ENTRANDO AL MAPA...");
+
+    fnt.scale = Math.fround(0.70);
+    fnt.color = rgba(185, 195, 212, 128);
+    fnt.print(barX, py + panelH - 34, "[CIRCULO] JUGAR EN 2.5D");
 }
 
 function renderHardware3DWorld(
@@ -1249,81 +1346,98 @@ function renderHardware3DWorld(
     const camX = px * WORLD_CELL_SIZE;
     const camZ = py * WORLD_CELL_SIZE;
 
-    Camera.position(camX, WORLD_EYE_H, camZ);
-    Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
-    Camera.update();
-
     const flashActive = player.flashlightOn && ((pbat - 0.0) > 0);
     const lowFlicker = (flashActive && ((pbat - 24.0) < 0) && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.30 : 1.0;
     const effFlash = toF64(flashActive ? (fInt * lowFlicker) : 0.0);
 
     const lPow = 0.22 + effFlash * 0.92;
     const redTint = dRatio * 0.38;
-    if (hwLightMain >= 0 && hwLightMain <= 3) {
-        Lights.set(hwLightMain, Lights.DIRECTION, -dirX, -0.22, -dirZ);
-        Lights.set(hwLightMain, Lights.AMBIENT, 0.14 + redTint * 0.35, 0.15, 0.18);
-        Lights.set(hwLightMain, Lights.DIFFUSE, Math.min(1.2, lPow + redTint), lPow * 0.96, lPow * 0.90);
-    }
 
-    // 1. Escenario estatico 3D (se va sumando progresivamente)
-    for (let i = 0; i < hwStaticObjs.length; i++) {
-        hwStaticObjs[i].render();
+    // Activar Z-buffer (DEPTH_TEST_ENABLE) durante el pase 3D VU1 y desactivarlo para 2D/HUD
+    const hasDepthToggle = (typeof Screen.setParam === "function" && typeof Screen.DEPTH_TEST_ENABLE !== "undefined");
+    if (hasDepthToggle) {
+        try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, true); } catch (_) {}
     }
-    // 2. Rejas 3D
-    if (hwGatesObj && !breakerActive) {
-        hwGatesObj.render();
-    }
+    try {
+        if (typeof Render.begin === "function") {
+            Render.begin();
+        }
+        Camera.position(camX, WORLD_EYE_H, camZ);
+        Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
+        Camera.update();
 
-    // 3. Items 3D con culling por distancia (< 17m / 8.5 celdas)
-    const spinY = toF64(frameTick * 0.03);
-    const bobY = toF64(Math.sin(frameTick * 0.08) * 0.08);
-    for (let i = 0; i < entities.length; i++) {
-        const e = entities[i];
-        if (e.taken) continue;
-        const prop = hwPropObjs[e.kind];
-        if (!prop) continue;
-        const dxC = toF64(e.x) - px;
-        const dyC = toF64(e.y) - py;
-        if ((dxC * dxC + dyC * dyC) > 72.25) continue;
-        const ex = toF64(e.x) * WORLD_CELL_SIZE;
-        const ez = toF64(e.y) * WORLD_CELL_SIZE;
-        let ey = 0.55 + bobY;
-        if (e.kind === "breaker") ey = 0.0;
-        else if (e.kind === "note") ey = 0.04;
-        prop.position = { x: ex, y: ey, z: ez };
-        prop.rotation = { x: 0.0, y: (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY, z: 0.0 };
-        prop.render();
-    }
+        if (hwLightMain >= 0 && hwLightMain <= 3) {
+            Lights.set(hwLightMain, Lights.DIRECTION, -dirX, -0.22, -dirZ);
+            Lights.set(hwLightMain, Lights.AMBIENT, 0.14 + redTint * 0.35, 0.15, 0.18);
+            Lights.set(hwLightMain, Lights.DIFFUSE, Math.min(1.2, lPow + redTint), lPow * 0.96, lPow * 0.90);
+        }
 
-    // 4. El Acechador en 3D con culling por distancia (< 19m / 9.5 celdas)
-    if (hwStalkerObj) {
-        const sdxC = toF64(stalker.x) - px;
-        const sdyC = toF64(stalker.y) - py;
-        if ((sdxC * sdxC + sdyC * sdyC) <= 90.25) {
-            const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
-            const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
-            const faceAng = Math.atan2(camX - sx, camZ - sz);
-            hwStalkerObj.position = { x: sx, y: 0.0, z: sz };
-            hwStalkerObj.rotation = { x: 0.0, y: faceAng, z: 0.0 };
-            hwStalkerObj.render();
+        // 1. Escenario estatico 3D
+        for (let i = 0; i < hwStaticObjs.length; i++) {
+            hwStaticObjs[i].render();
+        }
+        // 2. Rejas 3D
+        if (hwGatesObj && !breakerActive) {
+            hwGatesObj.render();
+        }
+
+        // 3. Items 3D con culling por distancia (< 18m / 9 celdas)
+        const spinY = toF64(frameTick * 0.03);
+        const bobY = toF64(Math.sin(frameTick * 0.08) * 0.08);
+        for (let i = 0; i < entities.length; i++) {
+            const e = entities[i];
+            if (e.taken) continue;
+            const prop = hwPropObjs[e.kind];
+            if (!prop) continue;
+            const dxC = toF64(e.x) - px;
+            const dyC = toF64(e.y) - py;
+            if ((dxC * dxC + dyC * dyC) > 81.0) continue;
+            const ex = toF64(e.x) * WORLD_CELL_SIZE;
+            const ez = toF64(e.y) * WORLD_CELL_SIZE;
+            let ey = 0.55 + bobY;
+            if (e.kind === "breaker") ey = 0.0;
+            else if (e.kind === "note") ey = 0.04;
+            prop.position = { x: ex, y: ey, z: ez };
+            prop.rotation = { x: 0.0, y: (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY, z: 0.0 };
+            prop.render();
+        }
+
+        // 4. El Acechador en 3D (visible hasta 30m / 15 celdas)
+        if (hwStalkerObj) {
+            const sdxC = toF64(stalker.x) - px;
+            const sdyC = toF64(stalker.y) - py;
+            if ((sdxC * sdxC + sdyC * sdyC) <= 225.0) {
+                const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
+                const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
+                const faceAng = Math.atan2(camX - sx, camZ - sz);
+                hwStalkerObj.position = { x: sx, y: 0.0, z: sz };
+                hwStalkerObj.rotation = { x: 0.0, y: faceAng, z: 0.0 };
+                hwStalkerObj.render();
+            }
+        }
+    } finally {
+        if (hasDepthToggle) {
+            try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {}
         }
     }
 
-    // 5. Linterna en mano (viewmodel 2D) y vineta sutil
-    const enableBob = GAME_SETTINGS.bob;
-    const vmBobOffset = enableBob ? ((Math.sin(pbob) * 3.0) | 0) : 0;
-    const vmSwayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 2.0) | 0) : 0;
-    if (GAME_SETTINGS.viewmodel) {
-        renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, vmBobOffset, vmSwayOffset, mAnim, frameTick);
-    }
-    if (GAME_SETTINGS.overlays && (dRatio - 0.22) > 0) {
-        const absBias = sBias < 0 ? -sBias : sBias;
-        if ((absBias - 0.18) > 0) {
-            let edgeAlpha = (dRatio * absBias * 84.0) | 0;
-            if (edgeAlpha > 88) edgeAlpha = 88;
-            const edgeCol = rgba(220, 18, 22, edgeAlpha);
-            if (sBias < 0) Draw.rect(0, 0, 22, screenH, edgeCol);
-            else Draw.rect(screenW - 22, 0, 22, screenH, edgeCol);
+    // 5. Linterna en mano (viewmodel 2D) y vineta sutil (solo en juego activo)
+    if (gameState === STATE_PLAY) {
+        const enableBob = GAME_SETTINGS.bob;
+        const vmBobOffset = enableBob ? ((Math.sin(pbob) * 3.0) | 0) : 0;
+        const vmSwayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 2.0) | 0) : 0;
+        if (GAME_SETTINGS.viewmodel) {
+            renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, vmBobOffset, vmSwayOffset, mAnim, frameTick);
+        }
+        if (GAME_SETTINGS.overlays && (dRatio - 0.22) > 0) {
+            const absBias = sBias < 0 ? -sBias : sBias;
+            if ((absBias - 0.18) > 0) {
+                let edgeAlpha = (dRatio * absBias * 84.0) | 0;
+                if (edgeAlpha > 88) edgeAlpha = 88;
+                const edgeCol = rgba(220, 18, 22, edgeAlpha);
+                if (sBias < 0) Draw.rect(0, 0, 22, screenH, edgeCol);
+                else Draw.rect(screenW - 22, 0, 22, screenH, edgeCol);
+            }
         }
     }
 }
@@ -2054,10 +2168,10 @@ function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities,
     Draw.rect(ox - 6, oy - 6, panelW + 12, panelH + 12, rgba(28, 46, 32, 124));
     Draw.rect(ox, oy, panelW, panelH, rgba(6, 14, 9, 126));
 
-    Draw.rect(ox, oy, panelW, 28, rgba(14, 38, 20, 126));
-    fnt.scale = Math.fround(0.48);
+    Draw.rect(ox, oy, panelW, 30, rgba(14, 38, 20, 126));
+    fnt.scale = Math.fround(0.68);
     fnt.color = rgba(110, 245, 140, 128);
-    fnt.print(ox + 10, oy + 6, "PLANO SUBSUELO 04 [SELECT / L2]");
+    fnt.print(ox + 10, oy + 5, "PLANO SUBSUELO 04 [SELECT/L2]");
 
     const cellPx = 11;
     const mapPx = MAP_W * cellPx;
@@ -2109,24 +2223,24 @@ function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities,
     Draw.rect(px - 3, py - 3, 6, 6, rgba(120, 255, 150, 128));
     Draw.line(px, py, px + ((Math.cos(pang) * 14.0) | 0), py + ((Math.sin(pang) * 14.0) | 0), rgba(150, 255, 180, 128));
 
-    fnt.scale = Math.fround(0.42);
+    fnt.scale = Math.fround(0.62);
     fnt.color = rgba(130, 245, 155, 128);
-    fnt.print(mx0 + (mapPx >> 1) - 4, my0 - 12, "N");
-    fnt.print(mx0 + (mapPx >> 1) - 4, my0 + mapPx + 2, "S");
-    fnt.print(mx0 - 11, my0 + (mapPx >> 1) - 5, "O");
-    fnt.print(mx0 + mapPx + 3, my0 + (mapPx >> 1) - 5, "E");
+    fnt.print(mx0 + (mapPx >> 1) - 5, my0 - 16, "N");
+    fnt.print(mx0 + (mapPx >> 1) - 5, my0 + mapPx + 1, "S");
+    fnt.print(mx0 - 13, my0 + (mapPx >> 1) - 8, "O");
+    fnt.print(mx0 + mapPx + 2, my0 + (mapPx >> 1) - 8, "E");
 
-    const lx = mx0 + mapPx + 14;
-    fnt.scale = Math.fround(0.44);
-    fnt.color = rgba(120, 255, 150, 128); fnt.print(lx, my0 + 8,  "TU POSICION");
-    fnt.color = rgba(255, 220, 60, 128);  fnt.print(lx, my0 + 34, "FUSIBLES");
-    fnt.color = rgba(255, 75, 75, 128);   fnt.print(lx, my0 + 60, "DISYUNTOR");
-    fnt.color = rgba(60, 230, 255, 128);  fnt.print(lx, my0 + 86, "BATERIAS");
-    fnt.color = rgba(235, 235, 245, 128); fnt.print(lx, my0 + 112,"NOTAS");
-    fnt.color = rgba(60, 235, 110, 128);  fnt.print(lx, my0 + 138,"SALIDA NORTE");
+    const lx = mx0 + mapPx + 16;
+    fnt.scale = Math.fround(0.64);
+    fnt.color = rgba(120, 255, 150, 128); fnt.print(lx, my0 + 4,   "TU POSICION");
+    fnt.color = rgba(255, 220, 60, 128);  fnt.print(lx, my0 + 32,  "FUSIBLES");
+    fnt.color = rgba(255, 75, 75, 128);   fnt.print(lx, my0 + 60,  "DISYUNTOR");
+    fnt.color = rgba(60, 230, 255, 128);  fnt.print(lx, my0 + 88,  "BATERIAS");
+    fnt.color = rgba(235, 235, 245, 128); fnt.print(lx, my0 + 116, "NOTAS");
+    fnt.color = rgba(60, 235, 110, 128);  fnt.print(lx, my0 + 144, "SALIDA");
     if ((dRatio - 0.18) > 0) {
         fnt.color = rgba(255, 50, 50, 128);
-        fnt.print(lx, my0 + 174, "! ANOMALIA !");
+        fnt.print(lx, my0 + 178, "! ANOMALIA !");
     }
 }
 
@@ -2241,19 +2355,19 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     fnt.color = rgba((242 * flicker) | 0, (44 * flicker) | 0, (44 * flicker) | 0, 128);
     fnt.print(px + 20, py + 10, "SUBSUELO 04");
 
-    fnt.scale = Math.fround(0.70);
+    fnt.scale = Math.fround(0.76);
     fnt.color = COL_GOLD;
-    fnt.print(px + 22, py + 54, "EL ACECHADOR - PS2");
+    fnt.print(px + 22, py + 52, "EL ACECHADOR - PS2");
 
     // Insignia de récord / Memory Card
-    fnt.scale = Math.fround(0.62);
+    fnt.scale = Math.fround(0.72);
     const best = GAME_SETTINGS.difficulty === 1 ? RECORDS.bestNightmareSec : RECORDS.bestNormalSec;
     if (best > 0) {
         fnt.color = COL_GREEN;
-        fnt.print(px + panelW - 210, py + 18, ["RECORD: ", formatTime(best)].join(""));
+        fnt.print(px + panelW - 210, py + 14, ["RECORD: ", formatTime(best)].join(""));
     } else {
         fnt.color = COL_MUTED;
-        fnt.print(px + panelW - 210, py + 18, "PS2 REAL");
+        fnt.print(px + panelW - 210, py + 14, "HK ENTERTAINMENT");
     }
     fnt.color = RECORDS.mcAvailable ? COL_CYAN : COL_MUTED;
     fnt.print(px + panelW - 210, py + 44, RECORDS.mcAvailable ? "MC0: OK" : "SIN MC0");
@@ -2261,16 +2375,16 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     // Opciones del Menú Principal (cadenas estáticas sin concatenación por frame para QuickJS PS2)
     const items = GAME_SETTINGS.difficulty === 1 ? TITLE_ITEMS_NIGHTMARE : TITLE_ITEMS_NORMAL;
 
-    const listY = py + 102;
+    const listY = py + 100;
     const rowH = 42;
     for (let i = 0; i < items.length; i++) {
         const ry = listY + i * rowH;
         const selected = (i === cursor);
         if (selected) {
-            Draw.rect(px + 18, ry - 4, panelW - 36, 34, COL_SEL_BG);
-            Draw.rect(px + 18, ry - 4, 6, 34, COL_SEL_BAR);
+            Draw.rect(px + 18, ry - 4, panelW - 36, 36, COL_SEL_BG);
+            Draw.rect(px + 18, ry - 4, 6, 36, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(selected ? 0.80 : 0.72);
+        fnt.scale = Math.fround(selected ? 0.84 : 0.78);
         fnt.color = selected ? COL_GOLD : COL_WHITE;
         if (selected) {
             fnt.print(px + 32, ry + 2, ">");
@@ -2281,9 +2395,9 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     }
 
     // Pie de navegación
-    const footY = py + panelH - 38;
+    const footY = py + panelH - 36;
     Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.62);
+    fnt.scale = Math.fround(0.72);
     fnt.color = COL_WHITE;
     fnt.print(px + 18, footY, "[D-PAD] ELEGIR   [X/START] ACEPTAR");
 }
@@ -2301,7 +2415,7 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
 
     const volIdx = ((GAME_SETTINGS.audioVolume / 25) | 0);
     const volLabel = (volIdx >= 0 && volIdx < VOL_LABELS.length) ? VOL_LABELS[volIdx] : "0%";
-    const audioVal = (GAME_SETTINGS.audioVolume === 0) ? "APAGADO (0%)" : (isAudioReady() ? volLabel : "NO DISPONIBLE");
+    const audioVal = (GAME_SETTINGS.audioVolume === 0) ? "APAGADO" : (isAudioReady() ? volLabel : "SIN AUDIO");
     const rows = [
         { label: "MOTOR GRAFICO",  val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
         { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
@@ -2323,18 +2437,18 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
             Draw.rect(px + 14, ry - 3, panelW - 28, 30, COL_SEL_BG);
             Draw.rect(px + 14, ry - 3, 5, 30, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.68);
+        fnt.scale = Math.fround(0.75);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         fnt.print(px + 24, ry + 1, rows[i].label);
 
         fnt.color = sel ? COL_CYAN : COL_WHITE;
         const valText = (i < rows.length - 1) ? ["< ", String(rows[i].val), " >"].join("") : String(rows[i].val);
-        fnt.print(px + panelW - 235, ry + 1, valText);
+        fnt.print(px + panelW - 250, ry + 1, valText);
     }
 
     const footY = py + panelH - 36;
     Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.60);
+    fnt.scale = Math.fround(0.70);
     if (saveFeedbackTimer > 0) {
         fnt.color = COL_GREEN;
         fnt.print(px + 18, footY, "AJUSTES GUARDADOS");
@@ -2356,35 +2470,35 @@ function drawControlsMenu(screenW, screenH, fnt) {
     drawPanel(px, py, panelW, panelH, "CONTROLES DUALSHOCK 2", fnt);
 
     const bindings = [
-        ["STICK IZQ / D-PAD",  "Caminar y desplazamiento lateral"],
-        ["STICK DER / L1-R1",  "Girar camara en primera persona"],
-        ["CIRCULO / CUADRADO", "Correr (consume stamina y genera ruido)"],
-        ["TRIANGULO",          "Encender / apagar linterna tactica"],
-        ["SELECT / L2",        "Desplegar u ocultar plano PDA"],
-        ["START",              "Pausar partida / abrir menu"],
-        ["R2",                 "Alternar diagnostico tecnico en juego"]
+        ["STICK IZQ / D-PAD",  "Caminar y moverse"],
+        ["STICK DER / L1-R1",  "Girar la camara"],
+        ["CIRCULO / CUAD.",    "Correr (usa stamina)"],
+        ["TRIANGULO",          "Linterna ON / OFF"],
+        ["SELECT / L2",        "Abrir / cerrar mapa PDA"],
+        ["START",              "Pausar partida"],
+        ["R2",                 "Diagnostico tecnico"]
     ];
 
-    let y = py + 48;
+    let y = py + 46;
     for (let i = 0; i < bindings.length; i++) {
-        Draw.rect(px + 16, y - 3, panelW - 32, 26, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
-        fnt.scale = Math.fround(0.64);
+        Draw.rect(px + 14, y - 3, panelW - 28, 30, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
+        fnt.scale = Math.fround(0.74);
         fnt.color = COL_GOLD;
         fnt.print(px + 20, y + 1, bindings[i][0]);
         fnt.color = COL_WHITE;
         fnt.print(px + 245, y + 1, bindings[i][1]);
-        y += 32;
+        y += 34;
     }
 
-    fnt.scale = Math.fround(0.46);
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_CYAN;
-    fnt.print(px + 22, y + 10, "CONSEJO: Apaga la linterna para esconderte o ilumina al Acechador de frente.");
+    fnt.print(px + 20, y + 8, "TIP: Apaga la luz para ocultarte o iluminalo.");
 
-    const footY = py + panelH - 32;
-    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.46);
+    const footY = py + panelH - 34;
+    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_GOLD;
-    fnt.print(px + 20, footY, "Presiona [X] o [CIRCULO] para volver");
+    fnt.print(px + 20, footY, "[X] o [CIRCULO] VOLVER");
 }
 
 function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPause, fnt) {
@@ -2405,41 +2519,41 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
         const tx = px + 16 + i * (tabW + 4);
         const sel = (i === selectedNoteIdx);
         const unlocked = !fromPause || collectedNotes[i];
-        Draw.rect(tx, py + 42, tabW, 24, sel ? COL_SEL_BG : rgba(20, 18, 24, 110));
-        if (sel) Draw.rect(tx, py + 64, tabW, 2, COL_SEL_BAR);
-        fnt.scale = Math.fround(0.62);
+        Draw.rect(tx, py + 44, tabW, 28, sel ? COL_SEL_BG : rgba(20, 18, 24, 110));
+        if (sel) Draw.rect(tx, py + 70, tabW, 2, COL_SEL_BAR);
+        fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : (unlocked ? COL_WHITE : COL_MUTED);
-        fnt.print(tx + 8, py + 47, unlocked ? LORE_TABS_OPEN[i] : LORE_TABS_LOCK[i]);
+        fnt.print(tx + 8, py + 48, unlocked ? LORE_TABS_OPEN[i] : LORE_TABS_LOCK[i]);
     }
 
     const note = LORE_NOTES[selectedNoteIdx];
     const unlocked = !fromPause || collectedNotes[selectedNoteIdx];
-    const bodyY = py + 82;
+    const bodyY = py + 88;
 
     if (unlocked) {
-        fnt.scale = Math.fround(0.56);
+        fnt.scale = Math.fround(0.74);
         fnt.color = COL_GOLD;
         fnt.print(px + 20, bodyY, note.code);
 
-        fnt.scale = Math.fround(0.64);
+        fnt.scale = Math.fround(0.74);
         fnt.color = COL_WHITE;
         for (let l = 0; l < note.lines.length; l++) {
-            fnt.print(px + 20, bodyY + 34 + l * 26, note.lines[l]);
+            fnt.print(px + 20, bodyY + 36 + l * 32, note.lines[l]);
         }
     } else {
-        fnt.scale = Math.fround(0.56);
+        fnt.scale = Math.fround(0.74);
         fnt.color = COL_MUTED;
-        fnt.print(px + 20, bodyY + 24, "REGISTRO NO ENCONTRADO EN ESTA PARTIDA");
-        fnt.scale = Math.fround(0.48);
-        fnt.print(px + 20, bodyY + 62, "Explora los pasillos del Subsuelo 04 y recoge las hojas");
-        fnt.print(px + 20, bodyY + 88, "blancas marcadas en el plano PDA para desbloquearlo.");
+        fnt.print(px + 20, bodyY + 24, "REGISTRO NO ENCONTRADO");
+        fnt.scale = Math.fround(0.72);
+        fnt.print(px + 20, bodyY + 66, "Explora el Subsuelo 04 y recoge las");
+        fnt.print(px + 20, bodyY + 98, "hojas marcadas en el plano PDA.");
     }
 
-    const footY = py + panelH - 32;
-    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.45);
-    fnt.color = COL_MUTED;
-    fnt.print(px + 18, footY, "[IZQ/DER] Cambiar registro   [X / CIRCULO] Volver");
+    const footY = py + panelH - 34;
+    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.70);
+    fnt.color = COL_WHITE;
+    fnt.print(px + 18, footY, "[IZQ/DER] NOTA   [X/CIRCULO] VOLVER");
 }
 
 function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
@@ -2451,42 +2565,43 @@ function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
-    drawPanel(px, py, panelW, panelH, "CREDITOS E INFORMACION DEL SISTEMA", fnt);
+    drawPanel(px, py, panelW, panelH, "CREDITOS Y SISTEMA PS2", fnt);
 
-    fnt.scale = Math.fround(0.62);
+    fnt.scale = Math.fround(0.80);
     fnt.color = COL_TITLE_RED;
-    fnt.print(px + 22, py + 48, "SUBSUELO 04: EL ACECHADOR");
+    fnt.print(px + 22, py + 46, "SUBSUELO 04: EL ACECHADOR");
 
-    fnt.scale = Math.fround(0.50);
+    fnt.scale = Math.fround(0.72);
     fnt.color = COL_WHITE;
-    fnt.print(px + 22, py + 84,  "Diseno y Desarrollo: Joaquin Gasperetti");
-    fnt.print(px + 22, py + 112, "Motor Runtime PS2:   AthenaEnv V4 (QuickJS + GS)");
-    fnt.print(px + 22, py + 140, "Render 3D:           PS2 VU1 + GS Hardware 3D (AthenaEnv V4)");
+    fnt.print(px + 22, py + 82,  "Estudio:   HK Entertainment");
+    fnt.print(px + 22, py + 112, "Autor:     Joaquin Gasperetti");
+    fnt.print(px + 22, py + 142, "Motor:     AthenaEnv V4 (VU1 + GS)");
 
-    Draw.rect(px + 20, py + 174, panelW - 40, 1, rgba(70, 50, 55, 110));
+    Draw.rect(px + 20, py + 176, panelW - 40, 2, rgba(70, 50, 55, 110));
 
+    fnt.scale = Math.fround(0.74);
     fnt.color = COL_GOLD;
-    fnt.print(px + 22, py + 188, "TELEMETRIA DE CONSOLA:");
-    fnt.scale = Math.fround(0.47);
+    fnt.print(px + 22, py + 186, "TELEMETRIA DE CONSOLA:");
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_CYAN;
-    fnt.print(px + 22, py + 216, ["Modo de video: ", String(screenW), "x", String(screenH), " (", modeInfo.vmodeLabel, ")"].join(""));
-    fnt.print(px + 22, py + 240, isAudioReady() ? "Audio PS2 (audsrv): ACTIVO (ambient.wav)" : "Audio PS2 (audsrv): INACTIVO");
-    fnt.print(px + 22, py + 264, RECORDS.mcAvailable ? "Memory Card (mc0):  DISPONIBLE" : "Memory Card (mc0):  NO DETECTADA");
-    fnt.print(px + 22, py + 288, ["Escapes totales: ", String(RECORDS.escapes)].join(""));
+    fnt.print(px + 22, py + 218, ["Video: ", String(screenW), "x", String(screenH), " (", modeInfo.vmodeLabel, ")"].join(""));
+    fnt.print(px + 22, py + 246, isAudioReady() ? "Audio PS2: ACTIVO" : "Audio PS2: INACTIVO");
+    fnt.print(px + 22, py + 274, RECORDS.mcAvailable ? "Memory Card (mc0): OK" : "Memory Card (mc0): NO DETECTADA");
+    fnt.print(px + 22, py + 302, ["Escapes totales: ", String(RECORDS.escapes)].join(""));
 
-    const footY = py + panelH - 32;
-    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.46);
+    const footY = py + panelH - 34;
+    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_GOLD;
-    fnt.print(px + 20, footY, "Presiona [X] o [CIRCULO] para volver");
+    fnt.print(px + 20, footY, "[X] o [CIRCULO] VOLVER");
 }
 
 function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
     const { sx, sy } = getSafeMargins();
     Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 6, 98));
 
-    const panelW = Math.min(480, screenW - sx * 2);
-    const panelH = 326;
+    const panelW = Math.min(490, screenW - sx * 2);
+    const panelH = 336;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
@@ -2502,15 +2617,15 @@ function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
     ];
 
     const startY = py + 50;
-    const rowH = 38;
+    const rowH = 39;
     for (let i = 0; i < items.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 16, ry - 3, panelW - 32, 32, COL_SEL_BG);
-            Draw.rect(px + 16, ry - 3, 5, 32, COL_SEL_BAR);
+            Draw.rect(px + 16, ry - 3, panelW - 32, 33, COL_SEL_BG);
+            Draw.rect(px + 16, ry - 3, 5, 33, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.72);
+        fnt.scale = Math.fround(0.78);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         if (sel) {
             fnt.print(px + 26, ry + 2, ">");
@@ -2520,9 +2635,9 @@ function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
         }
     }
 
-    fnt.scale = Math.fround(0.60);
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_WHITE;
-    fnt.print(px + 18, py + panelH - 30, "[X] ELEGIR   [O/START] SEGUIR");
+    fnt.print(px + 18, py + panelH - 32, "[X] ELEGIR   [O/START] SEGUIR");
 }
 
 function drawNoteOverlay(screenW, screenH, noteIdx, fnt) {
@@ -2530,23 +2645,23 @@ function drawNoteOverlay(screenW, screenH, noteIdx, fnt) {
     Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 6, 96));
 
     const note = LORE_NOTES[noteIdx] || LORE_NOTES[0];
-    const panelW = Math.min(540, screenW - sx * 2);
-    const panelH = 248;
+    const panelW = Math.min(548, screenW - sx * 2);
+    const panelH = 276;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
     drawPanel(px, py, panelW, panelH, note.code, fnt, rgba(160, 175, 200, 120));
 
-    fnt.scale = Math.fround(0.66);
+    fnt.scale = Math.fround(0.74);
     fnt.color = COL_WHITE;
     for (let l = 0; l < note.lines.length; l++) {
-        fnt.print(px + 18, py + 46 + l * 28, note.lines[l]);
+        fnt.print(px + 18, py + 48 + l * 34, note.lines[l]);
     }
 
-    Draw.rect(px, py + panelH - 36, panelW, 1, rgba(80, 90, 110, 110));
-    fnt.scale = Math.fround(0.46);
+    Draw.rect(px, py + panelH - 38, panelW, 2, rgba(80, 90, 110, 110));
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_GOLD;
-    fnt.print(px + 18, py + panelH - 26, "Presiona [X] o [CIRCULO] para guardar registro y continuar");
+    fnt.print(px + 18, py + panelH - 30, "[X] o [CIRCULO] GUARDAR Y SEGUIR");
 }
 
 function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, difficulty, fnt) {
@@ -2555,8 +2670,8 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
     const accent = isWin ? rgba(65, 210, 110, 124) : COL_BORDER_RED;
     Draw.rect(0, 0, screenW, screenH, tint);
 
-    const panelW = Math.min(520, screenW - sx * 2);
-    const panelH = 286;
+    const panelW = Math.min(540, screenW - sx * 2);
+    const panelH = 316;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
@@ -2568,62 +2683,64 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
         else if (secs <= 135) rank = "A";
         else if (secs <= 190) rank = "B";
 
-        fnt.scale = Math.fround(0.74);
+        fnt.scale = Math.fround(0.80);
         fnt.color = COL_GREEN;
         fnt.print(px + 20, py + 46, "ESCAPASTE DEL SUBSUELO 04!");
 
-        fnt.scale = Math.fround(0.52);
+        fnt.scale = Math.fround(0.74);
         fnt.color = COL_WHITE;
-        fnt.print(px + 20, py + 88,  ["Tiempo de escape: ", formatTime(secs), " (", String(secs), "s)"].join(""));
-        fnt.print(px + 20, py + 114, ["Dificultad:       ", DIFF_LABELS[difficulty] || "NORMAL"].join(""));
-        fnt.print(px + 20, py + 140, ["Registros:        ", String(notesFound), "/4"].join(""));
+        fnt.print(px + 20, py + 88,  ["Tiempo:     ", formatTime(secs)].join(""));
+        fnt.print(px + 20, py + 118, ["Dificultad: ", DIFF_LABELS[difficulty] || "NORMAL"].join(""));
+        fnt.print(px + 20, py + 148, ["Registros:  ", String(notesFound), "/4"].join(""));
 
         fnt.scale = Math.fround(1.1);
         fnt.color = COL_GOLD;
-        fnt.print(px + panelW - 115, py + 92, ["RANGO ", rank].join(""));
+        fnt.print(px + panelW - 140, py + 96, ["RANGO ", rank].join(""));
     } else {
-        fnt.scale = Math.fround(0.72);
+        fnt.scale = Math.fround(0.80);
         fnt.color = COL_TITLE_RED;
-        fnt.print(px + 20, py + 50, "EL ACECHADOR TE ATRAPO");
+        fnt.print(px + 20, py + 48, "EL ACECHADOR TE ATRAPO");
 
-        fnt.scale = Math.fround(0.50);
+        fnt.scale = Math.fround(0.74);
         fnt.color = COL_WHITE;
-        fnt.print(px + 20, py + 96,  ["Tiempo sobrevivido: ", formatTime(secs)].join(""));
+        fnt.print(px + 20, py + 90,  ["Tiempo: ", formatTime(secs)].join(""));
+        fnt.scale = Math.fround(0.70);
         fnt.color = COL_CYAN;
-        fnt.print(px + 20, py + 128, "Consejo: Apaga la linterna [TRIANGULO] para ocultarte");
-        fnt.print(px + 20, py + 152, "o enfoca directamente sus ojos para frenarlo.");
+        fnt.print(px + 20, py + 126, "TIP: Apaga la luz [TRIANG] para ocultarte");
+        fnt.print(px + 20, py + 156, "o apunta a sus ojos para frenarlo.");
     }
 
     const opts = isWin ? END_OPTS_WIN : END_OPTS_DEAD;
-    const optY = py + 190;
+    const optY = py + 204;
     for (let i = 0; i < opts.length; i++) {
-        const ry = optY + i * 36;
+        const ry = optY + i * 42;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 20, ry - 3, panelW - 40, 28, isWin ? rgba(20, 88, 42, 118) : COL_SEL_BG);
-            Draw.rect(px + 20, ry - 3, 4, 28, isWin ? COL_GREEN : COL_SEL_BAR);
+            Draw.rect(px + 20, ry - 3, panelW - 40, 34, isWin ? rgba(20, 88, 42, 118) : COL_SEL_BG);
+            Draw.rect(px + 20, ry - 3, 5, 34, isWin ? COL_GREEN : COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.72);
+        fnt.scale = Math.fround(0.78);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         if (sel) {
-            fnt.print(px + 30, ry + 1, ">");
-            fnt.print(px + 50, ry + 1, opts[i]);
+            fnt.print(px + 32, ry + 2, ">");
+            fnt.print(px + 54, ry + 2, opts[i]);
         } else {
-            fnt.print(px + 44, ry + 1, opts[i]);
+            fnt.print(px + 48, ry + 2, opts[i]);
         }
     }
 }
 
 function drawPadDisconnectedOverlay(screenW, screenH, fnt) {
     Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 0, 112));
-    const pw = 440;
-    const ph = 110;
+    const pw = 480;
+    const ph = 136;
     const px = (screenW - pw) >> 1;
     const py = (screenH - ph) >> 1;
     drawPanel(px, py, pw, ph, "MANDO DESCONECTADO", fnt);
-    fnt.scale = Math.fround(0.52);
+    fnt.scale = Math.fround(0.74);
     fnt.color = COL_GOLD;
-    fnt.print(px + 20, py + 52, "Conecta un DualShock 2 en el Puerto 1 para continuar.");
+    fnt.print(px + 20, py + 52, "Conecta un DualShock 2 en el");
+    fnt.print(px + 20, py + 84, "Puerto 1 para continuar.");
 }
 
 // --- MODULE: main.js ---
@@ -2643,7 +2760,8 @@ const screenMode = Screen.getMode();
 if (screenMode && typeof Screen.setMode === "function") {
     try {
         screenMode.zbuffering = true;
-        if (typeof Screen.Z16S !== "undefined") screenMode.psmz = Screen.Z16S;
+        if (typeof Z16S !== "undefined") screenMode.psmz = Z16S;
+        else if (typeof Screen.Z16S !== "undefined") screenMode.psmz = Screen.Z16S;
         Screen.setMode(screenMode);
     } catch (_) {}
 }
@@ -2656,8 +2774,74 @@ const MODE_INFO = {
 Screen.setVSync(true);
 if (typeof Screen.setParam === "function" && typeof Screen.DEPTH_TEST_ENABLE !== "undefined") { try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {} }
 
-const fnt = new Font("default");
+let fnt = null;
+try {
+    if (fileExistsSafe("assets/fonts/ui.ttf")) {
+        fnt = new Font("assets/fonts/ui.ttf");
+    }
+} catch (_) {
+    fnt = null;
+}
+if (!fnt) {
+    fnt = new Font("default");
+}
+// Sin dropshadow en FreeType para reducir trafico de glifos en GS VRAM
+
 const pad = Pads.get(0);
+
+// Logo de arranque HK Entertainment (reemplaza el boot logo nativo de AthenaEnv)
+let hkLogoImg = null;
+let hkLogoAttempted = false;
+let splashTick = 0;
+const SPLASH_DURATION = 135; // ~2.25s a 60Hz
+
+function freeHkLogo() {
+    if (hkLogoImg) {
+        try {
+            if (typeof hkLogoImg.free === "function") hkLogoImg.free();
+        } catch (_) {}
+        hkLogoImg = null;
+    }
+}
+
+function drawHkSplashScreen(screenW, screenH, fnt) {
+    Draw.rect(0, 0, screenW, screenH, rgba(6, 5, 8, 128));
+    if (!hkLogoAttempted) {
+        hkLogoAttempted = true;
+        try {
+            if (typeof Image === "function" && fileExistsSafe("assets/textures/hk_logo.png")) {
+                hkLogoImg = new Image("assets/textures/hk_logo.png");
+                if (hkLogoImg) {
+                    if (typeof LINEAR !== "undefined") hkLogoImg.filter = LINEAR;
+                    hkLogoImg.width = 216;
+                    hkLogoImg.height = 216;
+                }
+            }
+        } catch (_) {
+            hkLogoImg = null;
+        }
+    }
+
+    let alpha = 128;
+    if (splashTick < 24) {
+        alpha = ((splashTick * 128) / 24) | 0;
+    } else if (splashTick > SPLASH_DURATION - 28) {
+        alpha = (((SPLASH_DURATION - splashTick) * 128) / 28) | 0;
+    }
+    if (alpha < 0) alpha = 0;
+    if (alpha > 128) alpha = 128;
+
+    if (hkLogoImg) {
+        const lx = (screenW - 216) >> 1;
+        const ly = ((screenH - 216) >> 1) - 18;
+        hkLogoImg.color = rgba(255, 255, 255, alpha);
+        hkLogoImg.draw(lx, ly);
+    }
+
+    fnt.scale = Math.fround(0.80);
+    fnt.color = rgba(245, 210, 120, alpha);
+    fnt.print((screenW >> 1) - 66, ((screenH + 216) >> 1) + 4, "PRESENTA");
+}
 
 const STATE_TITLE     = 0;
 const STATE_PLAY      = 1;
@@ -2671,8 +2855,20 @@ const STATE_LORE      = 8;
 const STATE_CREDITS   = 9;
 const STATE_NOTE_VIEW = 10;
 const STATE_LOADING   = 11;
+const STATE_SPLASH      = 12;
+const STATE_MAP_LOADING = 13;
 
-let gameState = STATE_LOADING;
+let gameState = STATE_SPLASH;
+
+function startPlayWithLoading() {
+    resetGame();
+    if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
+        mapLoadPhase = 0;
+        switchState(STATE_MAP_LOADING);
+    } else {
+        switchState(STATE_PLAY);
+    }
+}
 let returnState = STATE_TITLE;
 let frameTick = 0;
 let jumpscareTimer = 0;
@@ -2911,14 +3107,14 @@ let runtimeErr = null;
 Screen.display(() => {
     if (runtimeErr !== null) {
         Draw.rect(0, 0, SCREEN_W, SCREEN_H, rgba(55, 0, 0, 128));
-        fnt.scale = Math.fround(0.55);
+        fnt.scale = Math.fround(0.76);
         fnt.color = rgba(255, 220, 220, 128);
-        fnt.print(24, 34, "ERROR EN TIEMPO DE EJECUCION:");
-        fnt.scale = Math.fround(0.46);
-        let ey = 66;
-        for (let off = 0; off < runtimeErr.length && ey < SCREEN_H - 24; off += 54) {
-            fnt.print(24, ey, runtimeErr.slice(off, off + 54));
-            ey += 22;
+        fnt.print(24, 30, "ERROR EN TIEMPO DE EJECUCION:");
+        fnt.scale = Math.fround(0.68);
+        let ey = 68;
+        for (let off = 0; off < runtimeErr.length && ey < SCREEN_H - 28; off += 42) {
+            fnt.print(24, ey, runtimeErr.slice(off, off + 42));
+            ey += 28;
         }
         return;
     }
@@ -2934,7 +3130,7 @@ Screen.display(() => {
         pad.update();
 
         // Auto-inicializa el audio si se salto la pantalla de carga y el volumen esta activado
-        if (gameState !== STATE_LOADING && frameTick >= 15 && GAME_SETTINGS.audioVolume > 0 && !audioInitAttempted) {
+        if (gameState !== STATE_SPLASH && gameState !== STATE_LOADING && frameTick >= 15 && GAME_SETTINGS.audioVolume > 0 && !audioInitAttempted) {
             initAudio();
         }
         // Cede 3ms al planificador cooperativo del EE para que el hilo de audio audsrv no se quede sin buffer
@@ -2942,7 +3138,19 @@ Screen.display(() => {
             try { os.sleep(3); } catch (_) {}
         }
 
-        // Arranque rapido (solo audio IOP/streams; el 3D se carga en streaming dentro de la partida)
+        // Pantalla de presentacion HK Entertainment (reemplaza el boot logo de AthenaEnv)
+        if (gameState === STATE_SPLASH) {
+            splashTick++;
+            drawHkSplashScreen(SCREEN_W, SCREEN_H, fnt);
+            if (splashTick >= SPLASH_DURATION ||
+                (splashTick > 10 && (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.START) || pad.justPressed(Pads.CIRCLE)))) {
+                freeHkLogo();
+                gameState = STATE_LOADING;
+            }
+            return;
+        }
+
+        // Arranque rapido (solo audio IOP/streams; el 3D se carga en streaming desde el menu)
         if (gameState === STATE_LOADING) {
             drawLoadingScreen(SCREEN_W, SCREEN_H, fnt);
             if (frameTick > 2 && pad.justPressed(Pads.CIRCLE)) {
@@ -2961,6 +3169,27 @@ Screen.display(() => {
             const finished = stepBootLoad();
             if (finished) {
                 gameState = STATE_TITLE;
+            }
+            return;
+        }
+
+        // Pantalla de carga dedicada del mapa 3D y El Acechador entre Menu y Partida
+        if (gameState === STATE_MAP_LOADING) {
+            drawMapLoadingScreen(SCREEN_W, SCREEN_H, fnt);
+            if (pad.justPressed(Pads.CIRCLE)) {
+                GAME_SETTINGS.qualityIndex = 1;
+                switchState(STATE_PLAY);
+                return;
+            }
+            if (mapLoadPhase === 0) {
+                mapLoadPhase = 1;
+                return;
+            }
+            mapLoadPhase = 0;
+            const done = stepOneMapLoad();
+            if (done) {
+                requestGC();
+                switchState(STATE_PLAY);
             }
             return;
         }
@@ -2985,8 +3214,7 @@ Screen.display(() => {
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.START)) {
                 playSfx("ui_select", 0, 0.85);
                 if (titleCursor === 0) {
-                    resetGame();
-                    switchState(STATE_PLAY);
+                    startPlayWithLoading();
                 } else if (titleCursor === 1) {
                     returnState = STATE_TITLE;
                     optionsCursor = 0;
@@ -3016,6 +3244,13 @@ Screen.display(() => {
             if (adjust !== 0) {
                 if (optionsCursor === 0) {
                     GAME_SETTINGS.qualityIndex = (GAME_SETTINGS.qualityIndex + adjust + 3) % 3;
+                    if (GAME_SETTINGS.qualityIndex === 0 && hwStreamFailed) {
+                        hwStreamFailed = false;
+                        hwStreamDone = false;
+                        hwStreamStep = 0;
+                        hwStreamCooldown = 2;
+                        hwLoadErrorMsg = "";
+                    }
                 } else if (optionsCursor === 1) {
                     GAME_SETTINGS.aspect16x9 = !GAME_SETTINGS.aspect16x9;
                 } else if (optionsCursor === 2) {
@@ -3319,16 +3554,16 @@ Screen.display(() => {
             fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
             if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
                 const pendStep = HW3D_STREAM_STEPS[hwStreamStep];
-                Draw.rect(SCREEN_W - sx - 262, topY + 34, 258, 22, rgba(12, 16, 26, 112));
-                fnt.scale = Math.fround(0.46);
+                Draw.rect(SCREEN_W - sx - 280, topY + 40, 276, 26, rgba(12, 16, 26, 118));
+                fnt.scale = Math.fround(0.62);
                 fnt.color = rgba(110, 230, 255, 128);
-                fnt.print(SCREEN_W - sx - 254, topY + 38, (STREAM_3D_BADGES[hwStreamStep] || "CARGANDO 3D...") + (pendStep ? " > " + pendStep.label : ""));
+                fnt.print(SCREEN_W - sx - 272, topY + 44, (STREAM_3D_BADGES[hwStreamStep] || "3D...") + (pendStep ? " " + pendStep.label : ""));
             }
             if (GAME_SETTINGS.qualityIndex === 0 && hwStreamFailed) {
-                Draw.rect(SCREEN_W - sx - 322, topY + 34, 318, 22, rgba(40, 8, 8, 120));
-                fnt.scale = Math.fround(0.44);
+                Draw.rect(SCREEN_W - sx - 340, topY + 40, 336, 26, rgba(40, 8, 8, 122));
+                fnt.scale = Math.fround(0.60);
                 fnt.color = rgba(255, 150, 130, 128);
-                fnt.print(SCREEN_W - sx - 314, topY + 38, "3D FALLO: " + String(hwLoadErrorMsg || "?").slice(0, 34));
+                fnt.print(SCREEN_W - sx - 332, topY + 44, "3D FALLO: " + String(hwLoadErrorMsg || "?").slice(0, 28));
             }
 
             fnt.color = rgba(250, 215, 95, 128);
@@ -3374,11 +3609,11 @@ Screen.display(() => {
                 let fps = 0;
                 try { fps = Screen.getFPS(60) | 0; } catch (_) {}
                 if (debugMode > 0) {
-                    Draw.rect(sx, topY + 32, hudW, 18, rgba(0, 0, 0, 112));
-                    fnt.scale = Math.fround(0.42);
+                    Draw.rect(sx, topY + 40, hudW, 24, rgba(0, 0, 0, 118));
+                    fnt.scale = Math.fround(0.58);
                     fnt.color = rgba(120, 255, 120, 128);
-                    fnt.print(sx + 6, topY + 34, "X:" + player.x.toFixed(1) + " Y:" + player.y.toFixed(1) +
-                        " R:" + renderStats.numRays + " DT:" + dtScale.toFixed(2) + " FPS:" + fps + " M:" + debugMode);
+                    fnt.print(sx + 6, topY + 43, "X:" + player.x.toFixed(1) + " Y:" + player.y.toFixed(1) +
+                        " 3D:" + (hw3dReady ? "VU1" : "2.5D") + " EN:" + hwStalkerSource + " FPS:" + fps);
                 } else {
                     Draw.rect(sx + hudW - 76, topY + 33, 76, 18, rgba(0, 0, 0, 100));
                     fnt.scale = Math.fround(0.66);
@@ -3487,8 +3722,7 @@ Screen.display(() => {
 
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.START)) {
                 if (endCursor === 0) {
-                    resetGame();
-                    switchState(STATE_PLAY);
+                    startPlayWithLoading();
                 } else {
                     titleCursor = 0;
                     switchState(STATE_TITLE);

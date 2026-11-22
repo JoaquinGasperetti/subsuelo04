@@ -58,3 +58,8 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 
 ## Cómo ejecutarlo en PCSX2
 - Activá **HostFS** en ajustes avanzados y cargá `athena.elf` desde **Sistema -> Iniciar archivo...**.
+
+## Novedades de esta corrección
+- **Motor 3D VU1 + Enemigo 3D**: Inicialización compatible con el `athena.elf` incluido (`Render.setView` sin requerir `Render.init()`), activación/desactivación automática de `Screen.DEPTH_TEST_ENABLE` entre el pase 3D y el HUD 2D, `accurate_clipping` en geometría del mapa y carga prioritaria de `assets/models/stalker.obj` (con fallback a `stalker.glb` y `stalker_placeholder.obj`).
+- **Textos nítidos en menús**: Fuente TrueType `assets/fonts/ui.ttf` (FreeType) con sombra sutil y escalas `>= 0.70` en todos los textos secundarios de menús para evitar borrosidad en 480i.
+- **Logo HK Entertainment**: Se desactivó el boot logo de AthenaEnv en `athena.ini` (`boot_logo = false`), se agregó la pantalla de arranque con `assets/textures/hk_logo.png` (256x256, liberada de VRAM antes de jugar) y se incluyó el ícono `ART/athena.elf_ICO.png` (64x64 PNG 8-bit) para copiar a `mass:/ART/` si deseás verlo en la lista APPS de OPL.
