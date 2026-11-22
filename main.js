@@ -1,23 +1,1951 @@
 // ============================================================================
+// SUBSUELO 04: EL ACECHADOR (PS2 Real Hardware - Single-File Bundle)
+// Cero imports ES6: 100% compatible con OPL (DVD ISO cdfs:/ y APPS mass:),
+// wLaunchELF y PCSX2 sin problemas de rutas relativas ni mayusculas.
+// ============================================================================
+
+// --- MODULE: src/config.js ---
+// ============================================================================
+// Configuración global, ajustes dinámicos y utilidades FLOAT64 para PS2 EE
+// ============================================================================
+
+// Ajustes modificables desde el menú de Opciones (y persistibles en Memory Card)
+const GAME_SETTINGS = {
+    // Calidad del raycaster: 0 = ALTA (160 rayos), 1 = EQUILIBRADA (128 rayos, ideal PS2 real), 2 = RENDIMIENTO (96 rayos)
+    qualityIndex: 1,
+    // Margen de seguridad para televisores CRT con overscan (true = seguro CRT, false = pantalla completa HD/emulador)
+    crtSafe: true,
+    // Sensibilidad de cámara: 0 = BAJA, 1 = MEDIA, 2 = ALTA
+    sensitivityIndex: 1,
+    // Vibración DualShock 2
+    rumble: true,
+    // Efectos visuales VHS, viñeta y partículas
+    overlays: true,
+    // Balanceo de cámara y linterna en mano
+    bob: true,
+    viewmodel: true,
+    particles: true,
+    // Audio ambiental en 0% por defecto para arranque 100% seguro en PS2 real USB (activar desde Opciones)
+    audioVolume: 0,
+    // Mostrar contador de FPS en esquina superior
+    showFps: false,
+    // Dificultad: 0 = NORMAL, 1 = PESADILLA
+    difficulty: 0
+};
+
+const QUALITY_RAYS = [160, 128, 96];
+const QUALITY_LABELS = ["ALTA (160)", "EQUILIBRADA (128)", "RAPIDA (96)"];
+const SENS_TURN_SPEED = [0.038, 0.052, 0.068];
+const SENS_LABELS = ["BAJA", "MEDIA", "ALTA"];
+const DIFF_LABELS = ["NORMAL", "PESADILLA"];
+
+// Zona muerta ampliada para sticks analógicos DualShock 2 reales con desgaste
+const STICK_DEADZONE = 0.22;
+
+const F64_ZERO = -0.0;
+
+function toF64(v) {
+    return Math.min(v) - F64_ZERO;
+}
+
+function fadd(a, b) {
+    return a - (-b);
+}
+
+function clampF64(v, lo, hi) {
+    const x = toF64(v);
+    const mn = toF64(lo);
+    const mx = toF64(hi);
+    if ((x - mn) < 0) return mn;
+    if ((x - mx) > 0) return mx;
+    return x;
+}
+
+// Empaquetado directo RGBA en entero de 32 bits (JS_TAG_INT), sin llamadas C a Color.new()
+function rgba(r, g, b, a) {
+    return (r & 255) | ((g & 255) << 8) | ((b & 255) << 16) | ((a & 255) << 24);
+}
+
+// Dispara el recolector de ciclos de QuickJS SOLO en transiciones de menú (nunca durante gameplay)
+function requestGC() {
+    try {
+        if (typeof std !== "undefined" && std && typeof std.gc === "function") {
+            std.gc();
+        }
+    } catch (_) {}
+}
+
+// --- MODULE: src/storage.js ---
+// ============================================================================
+// Persistencia segura en Memory Card PS2 (mc0:/SUBSUELO04/save.json)
+// Se degrada con gracia si no hay Memory Card conectada o se ejecuta desde DVD
+// ============================================================================
+
+const SAVE_DIR  = "mc0:/SUBSUELO04";
+const SAVE_PATH = "mc0:/SUBSUELO04/save.json";
+
+const RECORDS = {
+    bestNormalSec: 0,
+    bestNightmareSec: 0,
+    escapes: 0,
+    mcAvailable: false
+};
+
+function loadSaveData() {
+    try {
+        if (typeof std === "undefined" || !std || typeof std.exists !== "function") return false;
+        if (!std.exists(SAVE_PATH)) {
+            // Verificar si mc0 existe comprobando System.getMCInfo si está disponible
+            if (typeof System !== "undefined" && System && typeof System.getMCInfo === "function") {
+                const mc = System.getMCInfo(0);
+                if (mc && mc.type && mc.type > 0) RECORDS.mcAvailable = true;
+            }
+            return false;
+        }
+        const raw = std.loadFile(SAVE_PATH);
+        if (!raw) return false;
+        const data = JSON.parse(raw);
+        if (data && typeof data === "object") {
+            if (typeof data.qualityIndex === "number" && data.qualityIndex >= 0 && data.qualityIndex <= 2) {
+                GAME_SETTINGS.qualityIndex = data.qualityIndex | 0;
+            }
+            if (typeof data.crtSafe === "boolean") GAME_SETTINGS.crtSafe = data.crtSafe;
+            if (typeof data.sensitivityIndex === "number" && data.sensitivityIndex >= 0 && data.sensitivityIndex <= 2) {
+                GAME_SETTINGS.sensitivityIndex = data.sensitivityIndex | 0;
+            }
+            if (typeof data.rumble === "boolean") GAME_SETTINGS.rumble = data.rumble;
+            if (typeof data.overlays === "boolean") GAME_SETTINGS.overlays = data.overlays;
+            if (typeof data.audioVolume === "number" && data.audioVolume >= 0 && data.audioVolume <= 100) {
+                GAME_SETTINGS.audioVolume = data.audioVolume | 0;
+            }
+            if (typeof data.showFps === "boolean") GAME_SETTINGS.showFps = data.showFps;
+            if (typeof data.difficulty === "number" && (data.difficulty === 0 || data.difficulty === 1)) {
+                GAME_SETTINGS.difficulty = data.difficulty | 0;
+            }
+            if (typeof data.bestNormalSec === "number" && data.bestNormalSec > 0) {
+                RECORDS.bestNormalSec = data.bestNormalSec | 0;
+            }
+            if (typeof data.bestNightmareSec === "number" && data.bestNightmareSec > 0) {
+                RECORDS.bestNightmareSec = data.bestNightmareSec | 0;
+            }
+            if (typeof data.escapes === "number" && data.escapes > 0) {
+                RECORDS.escapes = data.escapes | 0;
+            }
+            RECORDS.mcAvailable = true;
+            return true;
+        }
+    } catch (_) {}
+    return false;
+}
+
+function saveGameData() {
+    try {
+        if (typeof std === "undefined" || !std || typeof std.open !== "function") return false;
+        if (typeof os !== "undefined" && os && typeof os.mkdir === "function") {
+            try { os.mkdir(SAVE_DIR); } catch (_) {}
+        }
+        const payload = JSON.stringify({
+            qualityIndex: GAME_SETTINGS.qualityIndex,
+            crtSafe: GAME_SETTINGS.crtSafe,
+            sensitivityIndex: GAME_SETTINGS.sensitivityIndex,
+            rumble: GAME_SETTINGS.rumble,
+            overlays: GAME_SETTINGS.overlays,
+            audioVolume: GAME_SETTINGS.audioVolume,
+            showFps: GAME_SETTINGS.showFps,
+            difficulty: GAME_SETTINGS.difficulty,
+            bestNormalSec: RECORDS.bestNormalSec,
+            bestNightmareSec: RECORDS.bestNightmareSec,
+            escapes: RECORDS.escapes
+        });
+        const f = std.open(SAVE_PATH, "w");
+        if (!f) return false;
+        f.puts(payload);
+        f.close();
+        RECORDS.mcAvailable = true;
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function recordEscape(secs, difficulty) {
+    RECORDS.escapes++;
+    if (difficulty === 1) {
+        if (RECORDS.bestNightmareSec === 0 || secs < RECORDS.bestNightmareSec) {
+            RECORDS.bestNightmareSec = secs;
+        }
+    } else {
+        if (RECORDS.bestNormalSec === 0 || secs < RECORDS.bestNormalSec) {
+            RECORDS.bestNormalSec = secs;
+        }
+    }
+    return saveGameData();
+}
+
+// --- MODULE: src/audio.js ---
+// ============================================================================
+// Gestor de Audio Ambiental seguro para PS2 (AthenaEnv Sound / audsrv)
+// ============================================================================
+
+let ambientStream = null;
+let audioReady = false;
+let audioPlaying = false;
+let lastAppliedVol = -1;
+
+function initAudio() {
+    try {
+        if (typeof Sound === "undefined" || !Sound || typeof Sound.Stream !== "function") return false;
+        if (typeof std !== "undefined" && std && typeof std.exists === "function") {
+            if (!std.exists("assets/ambient.wav")) return false;
+        }
+        ambientStream = Sound.Stream("assets/ambient.wav");
+        if (ambientStream) {
+            ambientStream.loop = true;
+            audioReady = true;
+            applyAudioVolume(GAME_SETTINGS.audioVolume);
+            if (GAME_SETTINGS.audioVolume > 0) {
+                ambientStream.play();
+                audioPlaying = true;
+            }
+            return true;
+        }
+    } catch (_) {
+        ambientStream = null;
+        audioReady = false;
+    }
+    return false;
+}
+
+function applyAudioVolume(vol) {
+    const clamped = vol < 0 ? 0 : (vol > 100 ? 100 : (vol | 0));
+    if (clamped === lastAppliedVol) return;
+    lastAppliedVol = clamped;
+    if (!audioReady || !ambientStream) return;
+    try {
+        if (typeof Sound.setVolume === "function") {
+            Sound.setVolume(clamped);
+        }
+        if (clamped === 0) {
+            if (audioPlaying && typeof ambientStream.pause === "function") {
+                ambientStream.pause();
+                audioPlaying = false;
+            }
+        } else {
+            if (!audioPlaying && typeof ambientStream.play === "function") {
+                ambientStream.play();
+                audioPlaying = true;
+            }
+        }
+    } catch (_) {}
+}
+
+function isAudioReady() {
+    return audioReady;
+}
+
+// --- MODULE: src/map.js ---
+// Mapa 20x20 del Subsuelo 04 y colisiones ultra-ligeras sin allocaciones por cuadro
+// 0 = Pasillo libre
+// 1 = Pared de hormigon humedo
+// 2 = Pilar/estructura oxidada
+// 3 = Pared de zona ritual / sangre
+// 4 = Compuerta blindada de salida (Norte)
+// 5 = Reja de seguridad (se abre al activar el Disyuntor Central)
+
+const MAP_W = 20;
+const MAP_H = 20;
+
+const BASE_MAP = [
+    [1,1,1,1,1,1,1,1,1,4,4,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,1],
+    [1,0,2,2,0,1,0,1,1,0,0,1,1,0,1,0,2,2,0,1],
+    [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+    [1,1,1,0,1,1,0,0,0,2,2,0,0,0,1,1,0,1,1,1],
+    [1,0,0,0,0,1,0,1,0,0,0,0,1,0,1,0,0,0,0,1],
+    [1,0,2,1,0,0,0,1,0,0,0,0,1,0,0,0,1,2,0,1],
+    [1,0,0,1,0,1,0,0,0,2,2,0,0,0,1,0,1,0,0,1],
+    [3,0,0,0,0,5,0,0,0,0,0,0,0,0,5,0,0,0,0,3],
+    [3,0,1,1,0,5,0,2,0,0,0,0,2,0,5,0,1,1,0,3],
+    [3,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,3],
+    [1,0,0,0,1,1,0,2,0,0,0,0,2,0,1,1,0,0,0,1],
+    [1,0,2,0,0,0,0,0,0,2,2,0,0,0,0,0,0,2,0,1],
+    [1,0,0,0,1,0,1,0,0,0,0,0,0,1,0,1,0,0,0,1],
+    [1,1,0,1,1,0,1,1,0,0,0,0,1,1,0,1,1,0,1,1],
+    [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1],
+    [1,0,2,1,0,1,0,3,0,0,0,0,3,0,1,0,1,2,0,1],
+    [1,0,0,1,0,1,0,3,3,0,0,3,3,0,1,0,1,0,0,1],
+    [1,0,0,0,0,0,0,0,0,3,3,0,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1,3,3,1,1,1,1,1,1,1,1,1]
+];
+
+function createWorldGrid() {
+    const grid = [];
+    for (let y = 0; y < MAP_H; y++) {
+        grid.push(BASE_MAP[y].slice());
+    }
+    return grid;
+}
+
+function getCell(grid, gx, gy) {
+    if (gx < 0 || gx >= MAP_W || gy < 0 || gy >= MAP_H) return 1;
+    return grid[gy][gx];
+}
+
+function isCellBlocked(grid, gx, gy) {
+    if (gx < 0 || gx >= MAP_W || gy < 0 || gy >= MAP_H) return true;
+    return grid[gy][gx] !== 0;
+}
+
+// Verificación directa de las 4 esquinas del bounding box (sin crear arrays por cuadro)
+function isPosWalkable(grid, nx, ny, margin = 0.25) {
+    const x = toF64(nx);
+    const y = toF64(ny);
+    const m = toF64(margin);
+    const x0 = (x - m) | 0;
+    const x1 = (x - (-m)) | 0;
+    const y0 = (y - m) | 0;
+    const y1 = (y - (-m)) | 0;
+
+    if (x0 < 0 || x1 >= MAP_W || y0 < 0 || y1 >= MAP_H) return false;
+    if (grid[y0][x0] !== 0) return false;
+    if (grid[y0][x1] !== 0) return false;
+    if (grid[y1][x0] !== 0) return false;
+    if (grid[y1][x1] !== 0) return false;
+    return true;
+}
+
+const LORE_NOTES = [
+    {
+        code: "REGISTRO #01 - INGENIERIA",
+        summary: "El disyuntor central corta las rejas de los sectores Este y Oeste.",
+        lines: [
+            "FECHA: 14/10 - TURNO NOCHE (SUBSUELO 04)",
+            "Tras el apagon se cerraron las rejas de contencion",
+            "hacia los sectores Este y Oeste.",
+            "El DISYUNTOR ROJO en el nucleo central libera",
+            "las trabas magneticas. Si bajas, ve directo alli."
+        ]
+    },
+    {
+        code: "REGISTRO #02 - SEGURIDAD",
+        summary: "No corras cerca suyo. Apaga la linterna y quedate quieto para esconderte.",
+        lines: [
+            "INFORME DE GUARDIA - ANOMALIA EN PASILLO SUR",
+            "Esa cosa reacciona al ruido de pisadas rapidas",
+            "y al haz directo de nuestras linternas tacticas.",
+            "Si sientes el pulso dispararse, apaga la luz [TRIANGULO]",
+            "y evita correr: en la oscuridad pierde tu rastro."
+        ]
+    },
+    {
+        code: "REGISTRO #03 - PROTOCOLO",
+        summary: "Si te mira de frente, ilumina sus ojos para frenar su avance.",
+        lines: [
+            "OBSERVACION DE CAMPO - COMPORTAMIENTO VISUAL",
+            "Aunque la luz lo atrae desde lejos, el haz concentrado",
+            "directo en sus ojos lo desorienta por unos segundos.",
+            "Usalo solo para ganar distancia cuando te acorrale",
+            "en un pasillo estrecho. Cuida la bateria."
+        ]
+    },
+    {
+        code: "REGISTRO #04 - EVACUACION",
+        summary: "Los 4 fusibles alimentan la compuerta de evacuacion al Norte.",
+        lines: [
+            "ORDEN DE EMERGENCIA - COMPUERTA NORTE",
+            "La salida blindada al Norte (arriba en el plano PDA)",
+            "requiere los 4 FUSIBLES industriales de respaldo.",
+            "Cuando el panel pase a VERDE, corre hacia la compuerta.",
+            "No mires atras."
+        ]
+    }
+];
+
+const LORE_MESSAGES = LORE_NOTES.map(n => n.code + ": " + n.summary);
+
+// --- MODULE: src/ai.js ---
+// IA de El Acechador con Pathfinding BFS sin asignaciones de memoria por cuadro
+// Normalizada por delta-time (dtScale) para velocidad idéntica en PS2 NTSC 60Hz y PAL 50Hz
+
+
+const AI_PATROL = 0;
+const AI_INVESTIGATE = 1;
+const AI_HUNT = 2;
+
+const WAYPOINTS = [
+    { x: 10.0, y: 10.0 },
+    { x: 10.0, y: 16.5 },
+    { x: 3.0,  y: 10.0 },
+    { x: 16.5, y: 10.0 },
+    { x: 3.5,  y: 3.0  },
+    { x: 16.5, y: 3.0  }
+];
+
+// Buffers estáticos preasignados para evitar Garbage Collection en QuickJS (PS2 EE)
+const TOTAL_CELLS = MAP_W * MAP_H;
+const bfsParent  = new Int16Array(TOTAL_CELLS);
+const bfsVisited = new Uint8Array(TOTAL_CELLS);
+const bfsQueue   = new Int16Array(TOTAL_CELLS);
+
+// Resultado reutilizable sin allocaciones por frame
+const aiResult = { distP: 99.0, los: false, blinded: false, sideBias: 0.0 };
+const bfsOutNode = { x: 10.0, y: 10.0 };
+
+function hasLineOfSight(grid, x0, y0, x1, y1) {
+    const sx = toF64(x0);
+    const sy = toF64(y0);
+    const dx = toF64(x1) - sx;
+    const dy = toF64(y1) - sy;
+    const distSq = (dx * dx) - (-(dy * dy));
+    if ((distSq - 0.01) < 0) return true;
+    const dist = Math.sqrt(distSq);
+    const steps = (dist * 3.0) | 0;
+    if (steps <= 1) return true;
+    const invSteps = 1.0 / steps;
+    for (let i = 1; i < steps; i++) {
+        const t = i * invSteps;
+        const cx = (sx - (-(dx * t))) | 0;
+        const cy = (sy - (-(dy * t))) | 0;
+        if (isCellBlocked(grid, cx, cy)) return false;
+    }
+    return true;
+}
+
+// BFS sin allocaciones para encontrar el siguiente centro de celda hacia (tx, ty)
+function findNextStepBFS(grid, sx, sy, tx, ty) {
+    const startX = sx | 0;
+    const startY = sy | 0;
+    const goalX  = tx | 0;
+    const goalY  = ty | 0;
+
+    if (startX === goalX && startY === goalY) {
+        bfsOutNode.x = tx;
+        bfsOutNode.y = ty;
+        return bfsOutNode;
+    }
+
+    bfsVisited.fill(0);
+    const startIdx = startY * MAP_W + startX;
+    const goalIdx  = goalY * MAP_W + goalX;
+    bfsVisited[startIdx] = 1;
+    bfsParent[startIdx]  = -1;
+    bfsQueue[0] = startIdx;
+
+    let found = false;
+    let head = 0;
+    let tail = 1;
+
+    while (head < tail) {
+        const cur = bfsQueue[head++];
+        if (cur === goalIdx) {
+            found = true;
+            break;
+        }
+        const cx = cur % MAP_W;
+        const cy = (cur / MAP_W) | 0;
+
+        // Derecha
+        if (cx + 1 < MAP_W) {
+            const nIdx = cur + 1;
+            if (!bfsVisited[nIdx] && grid[cy][cx + 1] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
+        }
+        // Izquierda
+        if (cx - 1 >= 0) {
+            const nIdx = cur - 1;
+            if (!bfsVisited[nIdx] && grid[cy][cx - 1] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
+        }
+        // Abajo
+        if (cy + 1 < MAP_H) {
+            const nIdx = cur + MAP_W;
+            if (!bfsVisited[nIdx] && grid[cy + 1][cx] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
+        }
+        // Arriba
+        if (cy - 1 >= 0) {
+            const nIdx = cur - MAP_W;
+            if (!bfsVisited[nIdx] && grid[cy - 1][cx] === 0) {
+                bfsVisited[nIdx] = 1;
+                bfsParent[nIdx] = cur;
+                bfsQueue[tail++] = nIdx;
+            }
+        }
+    }
+
+    if (!found) return null;
+
+    let step = goalIdx;
+    while (bfsParent[step] !== -1 && bfsParent[step] !== startIdx) {
+        step = bfsParent[step];
+    }
+    bfsOutNode.x = (step % MAP_W) - (-0.5);
+    bfsOutNode.y = ((step / MAP_W) | 0) - (-0.5);
+    return bfsOutNode;
+}
+
+function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0) {
+    const px = toF64(player.x);
+    const py = toF64(player.y);
+    const sx = toF64(stalker.x);
+    const sy = toF64(stalker.y);
+    const dt = toF64(dtScale);
+    const isNightmare = difficulty === 1;
+
+    const dxP = px - sx;
+    const dyP = py - sy;
+    const distSq = (dxP * dxP) - (-(dyP * dyP));
+    const rawDist = Math.sqrt(distSq);
+    const distP = toF64((rawDist - 0.001) < 0 ? 0.001 : rawDist);
+
+    const los = hasLineOfSight(grid, sx, sy, px, py);
+    const flashVisible = player.flashlightOn && ((toF64(player.battery) - 0.0) > 0);
+
+    const rangeBonus = isNightmare ? 1.8 : 0.0;
+    const baseDetect = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
+    const detectRange = baseDetect - (-rangeBonus);
+
+    if (los && (distP - detectRange) < 0) {
+        stalker.state = AI_HUNT;
+        stalker.targetX = px;
+        stalker.targetY = py;
+        stalker.alertTimer = isNightmare ? 230 : 180;
+    } else if (isSprinting && (distP - (11.0 - (-rangeBonus))) < 0) {
+        if (stalker.state !== AI_HUNT) stalker.state = AI_INVESTIGATE;
+        stalker.targetX = px;
+        stalker.targetY = py;
+        const minAlert = isNightmare ? 170 : 130;
+        if (stalker.alertTimer < minAlert) stalker.alertTimer = minAlert;
+    } else if (stalker.alertTimer > 0) {
+        stalker.alertTimer = Math.max(0, stalker.alertTimer - dt);
+        if (stalker.alertTimer <= 0) {
+            stalker.alertTimer = 0;
+            stalker.state = AI_PATROL;
+        }
+    }
+
+    if (stalker.state === AI_PATROL) {
+        const wp = WAYPOINTS[stalker.wpIdx];
+        const wx = toF64(wp.x);
+        const wy = toF64(wp.y);
+        stalker.targetX = wx;
+        stalker.targetY = wy;
+        const dwx = wx - sx;
+        const dwy = wy - sy;
+        if (((dwx * dwx - (-(dwy * dwy))) - 0.81) < 0) {
+            stalker.wpIdx = (stalker.wpIdx + 1) % WAYPOINTS.length;
+        }
+    }
+
+    // Recalcular camino BFS cada 12 cuadros para liberar CPU en PS2 (sin allocaciones)
+    if ((frameTick % 12) === 0 || !stalker.hasNextNode) {
+        const node = findNextStepBFS(grid, sx, sy, stalker.targetX, stalker.targetY);
+        if (node) {
+            stalker.nextNodeX = node.x;
+            stalker.nextNodeY = node.y;
+            stalker.hasNextNode = true;
+        } else {
+            stalker.hasNextNode = false;
+        }
+    }
+
+    const goalX = stalker.hasNextNode ? toF64(stalker.nextNodeX) : toF64(stalker.targetX);
+    const goalY = stalker.hasNextNode ? toF64(stalker.nextNodeY) : toF64(stalker.targetY);
+    const gx = goalX - sx;
+    const gy = goalY - sy;
+    const gDistRaw = Math.sqrt((gx * gx) - (-(gy * gy)));
+    const gDist = (gDistRaw - 0.001) < 0 ? 0.001 : gDistRaw;
+
+    const pang = toF64(player.ang);
+    const pDirX = Math.cos(pang);
+    const pDirY = Math.sin(pang);
+    const toMX = (sx - px) / distP;
+    const toMY = (sy - py) / distP;
+    const dot = (toMX * pDirX) - (-(toMY * pDirY));
+    // Producto cruzado para indicador direccional de peligro (izquierda < 0, derecha > 0)
+    const sideBias = (pDirX * toMY) - (pDirY * toMX);
+    const blinded = los && ((dot - 0.68) > 0) && flashVisible && ((distP - 10.0) < 0);
+
+    let speedMult = 0.72;
+    if (stalker.state === AI_INVESTIGATE) speedMult = 0.92;
+    if (stalker.state === AI_HUNT) speedMult = isNightmare ? 1.30 : 1.15;
+    if (blinded) speedMult *= (isNightmare ? 0.42 : 0.28);
+
+    const step = toF64(stalker.baseSpeed) * speedMult * dt;
+    const mx = (gx / gDist) * step;
+    const my = (gy / gDist) * step;
+
+    const nextSX = sx - (-mx);
+    const nextSY = sy - (-my);
+    if (isPosWalkable(grid, nextSX, sy, 0.22)) stalker.x = nextSX;
+    if (isPosWalkable(grid, stalker.x, nextSY, 0.22)) stalker.y = nextSY;
+
+    aiResult.distP = distP;
+    aiResult.los = los;
+    aiResult.blinded = blinded;
+    aiResult.sideBias = sideBias;
+    return aiResult;
+}
+
+// --- MODULE: src/renderer.js ---
+// ============================================================================
+// Renderizador 3D Ultra-Optimizado para PS2 Real (Emotion Engine 294MHz + GS)
+// - Calidad dinámica sin allocaciones: 160 (Alta), 128 (Equilibrada), 96 (Rápida)
+// - Agrupamiento de tramos (Span Batching) para detalles arquitectónicos en perspectiva
+// - Colores empaquetados por bits (JS_TAG_INT) sin llamadas C a Color.new() en bucles
+// - Sombreado Gouraud, rejas 3D transparentes, viewmodel, PDA y alerta direccional
+// ============================================================================
+
+
+const MAX_RAYS = 160;
+const zBuffer = new Float64Array(MAX_RAYS);
+
+// Tablas precalculadas para los 3 niveles de calidad (0 allocaciones por frame)
+const QUALITY_TABLES = [];
+for (let q = 0; q < QUALITY_RAYS.length; q++) {
+    const n = QUALITY_RAYS[q];
+    const camX = new Float64Array(n);
+    const beamProf = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        const cx = (2.0 * (i - (-0.5)) / n) - 1.0;
+        camX[i] = cx;
+        const absCx = cx < 0 ? -cx : cx;
+        const bp = 1.0 - absCx * 1.38;
+        beamProf[i] = (bp > 0) ? (bp * bp) : 0.0;
+    }
+    QUALITY_TABLES.push({ numRays: n, camX, beamProf });
+}
+
+// Caché de coordenadas horizontales exactas por (screenW, numRays) para evitar huecos en cualquier resolución
+let cachedColScreenW = -1;
+let cachedColNumRays = -1;
+const colStartX = new Int16Array(MAX_RAYS);
+const colWidth  = new Int16Array(MAX_RAYS);
+
+function ensureColLayout(screenW, numRays) {
+    if (cachedColScreenW === screenW && cachedColNumRays === numRays) return;
+    cachedColScreenW = screenW;
+    cachedColNumRays = numRays;
+    for (let i = 0; i < numRays; i++) {
+        const x0 = ((i * screenW) / numRays) | 0;
+        const x1 = (((i + 1) * screenW) / numRays) | 0;
+        colStartX[i] = x0;
+        colWidth[i]  = x1 - x0;
+    }
+}
+
+// Colores estáticos precomputados
+const ALPHA_OPAQUE    = 128 << 24;
+const COL_HORIZON     = rgba(2, 2, 4, 128);
+const COL_SPOT_FADE   = rgba(20, 28, 38, 0);
+const COL_LOCK_BOX    = rgba(38, 40, 46, 128);
+const COL_LOCK_LED    = rgba(255, 40, 30, 128);
+const COL_CHEV_DARK   = rgba(20, 22, 25, 128);
+const COL_DOOR_OPEN   = rgba(65, 255, 130, 128);
+const COL_DOOR_LOCK   = rgba(255, 55, 35, 128);
+const COL_SHADOW      = rgba(2, 2, 4, 92);
+const COL_TORSO_BOT   = rgba(12, 4, 6, 128);
+const COL_JAW         = rgba(18, 2, 4, 128);
+const COL_EYE_GLOW    = rgba(255, 25, 25, 68);
+const COL_EYE_RED     = rgba(255, 25, 20, 128);
+const COL_EYE_CORE    = rgba(255, 210, 190, 128);
+const COL_FUSE_HALO   = rgba(255, 185, 30, 42);
+const COL_FUSE_BODY   = rgba(190, 140, 35, 128);
+const COL_FUSE_CAP    = rgba(120, 95, 55, 128);
+const COL_FUSE_CORE   = rgba(255, 245, 185, 128);
+const COL_BAT_HALO    = rgba(30, 210, 255, 40);
+const COL_BAT_TERM    = rgba(185, 195, 205, 128);
+const COL_BAT_BODY    = rgba(22, 52, 68, 128);
+const COL_BAT_BAR1    = rgba(70, 235, 255, 128);
+const COL_BAT_BAR2    = rgba(185, 255, 255, 128);
+const COL_BRK_HALO    = rgba(255, 45, 35, 48);
+const COL_BRK_OUT     = rgba(75, 28, 28, 128);
+const COL_BRK_IN      = rgba(185, 42, 38, 128);
+const COL_BRK_WARN    = rgba(255, 220, 65, 128);
+const COL_BRK_LEVER   = rgba(25, 25, 30, 128);
+const COL_NOTE_HALO   = rgba(180, 210, 255, 36);
+const COL_NOTE_PAGE   = rgba(232, 236, 244, 128);
+const COL_NOTE_INK    = rgba(45, 55, 70, 128);
+const COL_NOTE_BLOOD  = rgba(165, 40, 40, 128);
+const COL_VIG_DARK    = rgba(0, 0, 4, 86);
+const COL_VIG_CLEAR   = rgba(0, 0, 4, 0);
+const COL_SLEEVE1     = rgba(24, 28, 34, 128);
+const COL_SLEEVE2     = rgba(10, 12, 16, 128);
+const COL_GLOVE       = rgba(38, 42, 48, 128);
+const COL_GLOVE_HI    = rgba(54, 60, 68, 128);
+const COL_FL_TOP      = rgba(92, 100, 114, 128);
+const COL_FL_BOT      = rgba(26, 30, 36, 128);
+const COL_FL_HEAD_T   = rgba(120, 130, 144, 128);
+const COL_FL_HEAD_B   = rgba(42, 46, 54, 128);
+const COL_LENS_ON     = rgba(245, 250, 255, 128);
+const COL_LENS_OFF    = rgba(45, 55, 65, 128);
+const COL_LED_OFF     = rgba(180, 35, 35, 128);
+const COL_LED_LOW     = rgba(255, 165, 30, 128);
+const COL_LED_OK      = rgba(55, 245, 115, 128);
+const COL_MAGENTA     = rgba(255, 0, 255, 128);
+const COL_EDGE_CLEAR  = rgba(210, 15, 15, 0);
+
+// Pool estático para ordenar entidades sin crear objetos ni closures por frame
+const MAX_DRAW_ENTITIES = 16;
+const drawPool = [];
+for (let i = 0; i < MAX_DRAW_ENTITIES; i++) {
+    drawPool.push({ kind: "", x: 0.0, y: 0.0, distSq: 0.0 });
+}
+
+const renderStats = { cols: 0, minD: 99.0, maxD: 0.0, wallMode: 0, numRays: 128 };
+
+function render3DWorld(
+    screenW, screenH, grid, player, stalker, entities,
+    dangerRatio, frameTick, exitUnlocked, fov, flashIntensity,
+    mapAnim = 0.0, sideBias = 0.0
+) {
+    const qIdx = GAME_SETTINGS.qualityIndex;
+    const qTable = QUALITY_TABLES[qIdx] || QUALITY_TABLES[1];
+    const numRays = qTable.numRays;
+    const CAM_X = qTable.camX;
+    const BEAM_PROF = qTable.beamProf;
+    ensureColLayout(screenW, numRays);
+    renderStats.numRays = numRays;
+
+    const px = toF64(player.x);
+    const py = toF64(player.y);
+    const pang = toF64(player.ang);
+    const pbob = toF64(player.bobPhase);
+    const pbat = toF64(player.battery);
+    const dRatio = toF64(dangerRatio);
+    const fovVal = toF64(fov);
+    const fInt = toF64(flashIntensity);
+    const mAnim = toF64(mapAnim);
+    const sBias = toF64(sideBias);
+
+    const enableBob = GAME_SETTINGS.bob;
+    const enableOverlays = GAME_SETTINGS.overlays;
+    const enableViewmodel = GAME_SETTINGS.viewmodel;
+    const enableParticles = GAME_SETTINGS.particles && enableOverlays;
+
+    const bobOffset = enableBob ? ((Math.sin(pbob) * 7.0) | 0) : 0;
+    const swayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 4.0) | 0) : 0;
+    const panicShakeY = (enableBob && (dRatio - 0.30) > 0) ? (((Math.random() - 0.5) * 7.0 * dRatio) | 0) : 0;
+    const panicShakeX = (enableBob && (dRatio - 0.45) > 0) ? (((Math.random() - 0.5) * 4.0 * dRatio) | 0) : 0;
+    let halfH = ((screenH >> 1) + bobOffset + panicShakeY) | 0;
+    if (halfH < 40) halfH = 40;
+    else if (halfH > screenH - 40) halfH = screenH - 40;
+
+    const flashActive = player.flashlightOn && ((pbat - 0.0) > 0);
+    const lowFlicker = (flashActive && ((pbat - 24.0) < 0) && (frameTick % 9 === 0 || frameTick % 23 === 0)) ? 0.28 : 1.0;
+    const effFlash = toF64(flashActive ? (fInt * lowFlicker) : 0.0);
+    const emerPulse = 0.65 - (-(Math.sin(frameTick * 0.09) * 0.35));
+    const emerFlicker = toF64(((frameTick % 97) < 6) ? 0.35 : emerPulse);
+
+    // ------------------------------------------------------------------------
+    // 1. TECHO Y PISO GOURAUD POR HARDWARE + CONO VOLUMETRICO DE LINTERNA
+    // ------------------------------------------------------------------------
+    const redPulse = (dRatio * 36.0) | 0;
+    const ceilTopCol = rgba(14 + redPulse, 16, 22, 128);
+    const ceilMidCol = rgba(7 + (redPulse >> 1), 8, 12, 128);
+    const floorMidCol = rgba(12 + (redPulse >> 1), 14, 18, 128);
+    const floorBotCol = rgba(26 + redPulse, 25, 30, 128);
+
+    const midCeilY = (halfH * 0.55) | 0;
+    const floorMidY = halfH + (((screenH - halfH) * 0.45) | 0);
+
+    Draw.quad(0, 0, screenW, 0, 0, midCeilY, screenW, midCeilY, ceilTopCol, ceilTopCol, ceilMidCol, ceilMidCol);
+    Draw.quad(0, midCeilY, screenW, midCeilY, 0, halfH, screenW, halfH, ceilMidCol, ceilMidCol, COL_HORIZON, COL_HORIZON);
+    Draw.quad(0, halfH, screenW, halfH, 0, floorMidY, screenW, floorMidY, COL_HORIZON, COL_HORIZON, floorMidCol, floorMidCol);
+    Draw.quad(0, floorMidY, screenW, floorMidY, 0, screenH, screenW, screenH, floorMidCol, floorMidCol, floorBotCol, floorBotCol);
+
+    // Proyeccion volumetrica del haz de linterna en piso y techo (2 quads Gouraud)
+    if ((effFlash - 0.05) > 0) {
+        const spotCx = (screenW >> 1) + swayOffset;
+        let spotAlpha = (effFlash * 44.0) | 0;
+        if (spotAlpha > 72) spotAlpha = 72;
+        const spotHotCol = rgba(195, 215, 240, spotAlpha);
+        Draw.quad(
+            spotCx - 28, halfH + 6,
+            spotCx + 28, halfH + 6,
+            spotCx - 230, screenH,
+            spotCx + 230, screenH,
+            COL_SPOT_FADE, COL_SPOT_FADE, spotHotCol, spotHotCol
+        );
+        const ceilHotCol = rgba(150, 175, 205, spotAlpha >> 1);
+        Draw.quad(
+            spotCx - 170, 0,
+            spotCx + 170, 0,
+            spotCx - 24, halfH - 6,
+            spotCx + 24, halfH - 6,
+            ceilHotCol, ceilHotCol, COL_SPOT_FADE, COL_SPOT_FADE
+        );
+    }
+
+    const dirX = toF64(Math.cos(pang));
+    const dirY = toF64(Math.sin(pang));
+    const planeScale = toF64(Math.tan(fovVal * 0.5));
+    const planeX = -dirY * planeScale;
+    const planeY =  dirX * planeScale;
+
+    renderStats.cols = 0;
+    renderStats.minD = toF64(99.0);
+    renderStats.maxD = toF64(0.0);
+
+    // Variables de Span Batching por celda de muro
+    let spanKey = -1;
+    let spanHit = 0;
+    let spanX0 = 0;
+    let spanX1 = 0;
+    let spanTop0 = 0, spanBot0 = 0, spanH0 = 0;
+    let spanTop1 = 0, spanBot1 = 0, spanH1 = 0;
+    let spanCR = 0, spanCG = 0, spanCB = 0;
+
+    // ------------------------------------------------------------------------
+    // 2. RAYCASTING DDA + AGRUPAMIENTO POR TRAMOS (SPAN BATCH)
+    // ------------------------------------------------------------------------
+    for (let i = 0; i < numRays; i++) {
+        const camX = CAM_X[i];
+        const rayDirX = dirX - (-planeX * camX);
+        const rayDirY = dirY - (-planeY * camX);
+
+        let mapX = px | 0;
+        let mapY = py | 0;
+
+        const absRayX = rayDirX < 0 ? -rayDirX : rayDirX;
+        const absRayY = rayDirY < 0 ? -rayDirY : rayDirY;
+        const deltaDistX = (absRayX - 1e-6) < 0 ? 1e6 : (1.0 / absRayX);
+        const deltaDistY = (absRayY - 1e-6) < 0 ? 1e6 : (1.0 / absRayY);
+
+        let stepX = 0, stepY = 0;
+        let sideDistX = F64_ZERO, sideDistY = F64_ZERO;
+
+        if (rayDirX < 0) {
+            stepX = -1;
+            sideDistX = (px - mapX) * deltaDistX;
+        } else {
+            stepX = 1;
+            sideDistX = (mapX - (-1.0) - px) * deltaDistX;
+        }
+
+        if (rayDirY < 0) {
+            stepY = -1;
+            sideDistY = (py - mapY) * deltaDistY;
+        } else {
+            stepY = 1;
+            sideDistY = (mapY - (-1.0) - py) * deltaDistY;
+        }
+
+        let hit = 0;
+        let side = 0;
+        let steps = 0;
+
+        let hasGate = false;
+        let gateDist = F64_ZERO;
+        let gateSide = 0;
+
+        while (hit === 0 && steps < 48) {
+            steps++;
+            if ((sideDistX - sideDistY) < 0) {
+                sideDistX = sideDistX - (-deltaDistX);
+                mapX += stepX;
+                side = 0;
+            } else {
+                sideDistY = sideDistY - (-deltaDistY);
+                mapY += stepY;
+                side = 1;
+            }
+            if (mapX < 0 || mapX >= MAP_W || mapY < 0 || mapY >= MAP_H) {
+                hit = 1;
+                break;
+            }
+            const cell = grid[mapY][mapX];
+            if (cell === 5) {
+                if (!hasGate) {
+                    hasGate = true;
+                    gateDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
+                    if ((gateDist - 0.14) < 0) gateDist = toF64(0.14);
+                    gateSide = side;
+                }
+            } else if (cell > 0) {
+                hit = cell;
+            }
+        }
+
+        let perpDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
+        if ((perpDist - 0.14) < 0) perpDist = toF64(0.14);
+        zBuffer[i] = perpDist;
+
+        const screenX = colStartX[i];
+        const colW = colWidth[i];
+        const wallH = (screenH / perpDist) | 0;
+        const rawStart = halfH - (wallH >> 1);
+        const rawEnd = rawStart + wallH;
+        const drawStart = rawStart < 0 ? 0 : rawStart;
+        const drawEnd = rawEnd > screenH ? screenH : rawEnd;
+        const clippedH = drawEnd - drawStart;
+
+        const beam = ((effFlash - 0.0) > 0) ? (BEAM_PROF[i] * effFlash) : 0.0;
+        const maxVis = ((effFlash - 0.0) > 0) ? (7.5 - (-beam * 8.5)) : 4.2;
+
+        if (clippedH > 0) {
+            let light = 1.0 - (perpDist / maxVis);
+            if ((light - 0.10) < 0) light = 0.10;
+            if (side === 1) light *= 0.74;
+            const distFactor = 1.0 - perpDist * 0.087;
+            if ((distFactor - 0.0) > 0) {
+                light = light - (-(beam * 0.45 * distFactor));
+            }
+            if ((light - 1.25) > 0) light = 1.25;
+
+            let wallX = (side === 0) ? (py - (-perpDist * rayDirY)) : (px - (-perpDist * rayDirX));
+            wallX -= (wallX | 0);
+
+            const isEdgeSeam = ((wallX - 0.04) < 0 || (wallX - 0.96) > 0);
+            const isPanel = (((wallX * 4.0) | 0) & 1) === 0;
+            if (isEdgeSeam) light *= 0.50;
+            else if (isPanel) light *= 0.93;
+
+            let r = 98, g = 106, b = 116;
+            if (hit === 2) {
+                r = 136; g = 76; b = 54;
+            } else if (hit === 3) {
+                r = (92.0 - (-72.0 * emerFlicker)) | 0;
+                g = 26;
+                b = 28;
+            } else if (hit === 4) {
+                r = exitUnlocked ? 42 : 148;
+                g = exitUnlocked ? 210 : 108;
+                b = exitUnlocked ? 95 : 38;
+            }
+
+            let cR = ((r * light) - (-dRatio * 26.0)) | 0;
+            let cG = (g * light) | 0;
+            let cB = (b * light) | 0;
+            if (cR > 255) cR = 255;
+            if (cG > 255) cG = 255;
+            if (cB > 255) cB = 255;
+
+            renderStats.cols++;
+            if ((perpDist - renderStats.minD) < 0) renderStats.minD = perpDist;
+            if ((perpDist - renderStats.maxD) > 0) renderStats.maxD = perpDist;
+
+            if (renderStats.wallMode === 1) {
+                Draw.rect(screenX, drawStart, colW, clippedH, COL_MAGENTA);
+            } else {
+                Draw.rect(screenX, drawStart, colW, clippedH, cR | (cG << 8) | (cB << 16) | ALPHA_OPAQUE);
+            }
+
+            const cellKey = (mapY << 7) | (mapX << 1) | side;
+            if (cellKey === spanKey) {
+                spanX1 = screenX + colW;
+                spanTop1 = drawStart;
+                spanBot1 = drawEnd;
+                spanH1 = wallH;
+            } else {
+                if (spanKey !== -1 && renderStats.wallMode === 0) {
+                    flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, exitUnlocked, emerFlicker);
+                }
+                spanKey = cellKey;
+                spanHit = hit;
+                spanX0 = screenX;
+                spanX1 = screenX + colW;
+                spanTop0 = drawStart;
+                spanBot0 = drawEnd;
+                spanH0 = wallH;
+                spanTop1 = drawStart;
+                spanBot1 = drawEnd;
+                spanH1 = wallH;
+                spanCR = cR;
+                spanCG = cG;
+                spanCB = cB;
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // 2B. REJAS DE SEGURIDAD 3D TRANSPARENTES
+        // --------------------------------------------------------------------
+        if (hasGate) {
+            const gWallH = (screenH / gateDist) | 0;
+            const gRawStart = halfH - (gWallH >> 1);
+            const gRawEnd = gRawStart + gWallH;
+            const gStart = gRawStart < 0 ? 0 : gRawStart;
+            const gEnd = gRawEnd > screenH ? screenH : gRawEnd;
+            const gClippedH = gEnd - gStart;
+
+            if (gClippedH > 0) {
+                let gWX = (gateSide === 0) ? (py - (-gateDist * rayDirY)) : (px - (-gateDist * rayDirX));
+                gWX -= (gWX | 0);
+
+                let gLight = 1.0 - (gateDist / maxVis);
+                if ((gLight - 0.16) < 0) gLight = 0.16;
+                if (gateSide === 1) gLight *= 0.78;
+
+                const barScaled = gWX * 7.0;
+                const barFrac = barScaled - (barScaled | 0);
+
+                if ((barFrac - 0.34) < 0) {
+                    const metal = gLight * 0.95;
+                    let bR = ((115 * metal) - (-dRatio * 20.0)) | 0;
+                    let bG = (125 * metal) | 0;
+                    let bB = (138 * metal) | 0;
+                    if (bR > 255) bR = 255;
+                    if (bG > 255) bG = 255;
+                    if (bB > 255) bB = 255;
+                    Draw.rect(screenX, gStart, colW, gClippedH, bR | (bG << 8) | (bB << 16) | ALPHA_OPAQUE);
+                    zBuffer[i] = gateDist;
+                } else {
+                    const crossH = Math.max(2, (gWallH * 0.05) | 0);
+                    const midBarY = gRawStart + (gWallH >> 1);
+                    if (midBarY >= gStart && midBarY + crossH <= gEnd) {
+                        Draw.rect(screenX, midBarY, colW, crossH, rgba((75 * gLight) | 0, (82 * gLight) | 0, (92 * gLight) | 0, 128));
+                    }
+                }
+
+                if ((gWX - 0.44) > 0 && (gWX - 0.56) < 0) {
+                    const lbY = gRawStart + ((gWallH * 0.44) | 0);
+                    const lbH = Math.max(4, (gWallH * 0.12) | 0);
+                    if (lbY >= gStart && lbY + lbH <= gEnd) {
+                        Draw.rect(screenX, lbY, colW, lbH, ((frameTick & 15) < 10) ? COL_LOCK_LED : COL_LOCK_BOX);
+                    }
+                }
+            }
+        }
+    }
+
+    if (spanKey !== -1 && renderStats.wallMode === 0) {
+        flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, exitUnlocked, emerFlicker);
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. PROYECCION 3D DE ENTIDADES Y EL ACECHADOR (SIN ALLOCACIONES)
+    // ------------------------------------------------------------------------
+    let drawCount = 0;
+    for (let e = 0; e < entities.length; e++) {
+        const ent = entities[e];
+        if (!ent.taken && drawCount < MAX_DRAW_ENTITIES - 1) {
+            const slot = drawPool[drawCount++];
+            slot.kind = ent.kind;
+            slot.x = toF64(ent.x);
+            slot.y = toF64(ent.y);
+            const dx = slot.x - px;
+            const dy = slot.y - py;
+            slot.distSq = (dx * dx) - (-(dy * dy));
+        }
+    }
+    {
+        const slot = drawPool[drawCount++];
+        slot.kind = "stalker";
+        slot.x = toF64(stalker.x);
+        slot.y = toF64(stalker.y);
+        const dx = slot.x - px;
+        const dy = slot.y - py;
+        slot.distSq = (dx * dx) - (-(dy * dy));
+    }
+
+    for (let i = 1; i < drawCount; i++) {
+        const tmp = drawPool[i];
+        const tmpDist = tmp.distSq;
+        let j = i - 1;
+        while (j >= 0 && (drawPool[j].distSq - tmpDist) < 0) {
+            drawPool[j + 1] = drawPool[j];
+            j--;
+        }
+        drawPool[j + 1] = tmp;
+    }
+
+    const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+    const raysPerPx = numRays / screenW;
+    for (let s = 0; s < drawCount; s++) {
+        const sp = drawPool[s];
+        const sx = sp.x - px;
+        const sy = sp.y - py;
+        const transformX = invDet * (dirY * sx - dirX * sy);
+        const transformY = invDet * ((-planeY * sx) - (-planeX * sy));
+
+        if ((transformY - 0.22) <= 0) continue;
+
+        const screenX = (((screenW * 0.5) * (1.0 - (-transformX / transformY))) | 0) + swayOffset + panicShakeX;
+        let spH = (screenH / transformY) | 0;
+        if (spH > (screenH << 1)) spH = screenH << 1;
+        const colIdx = (screenX * raysPerPx) | 0;
+
+        if (sp.kind === "stalker") {
+            const mW = Math.max(14, (spH * 0.48) | 0);
+            const mH = (spH * 0.92) | 0;
+            const mLeft = screenX - (mW >> 1);
+            const stride = Math.sin(frameTick * 0.24);
+            const absStride = stride < 0 ? -stride : stride;
+            const bobStalker = (absStride * Math.max(2, (spH * 0.035) | 0)) | 0;
+            const mTop = Math.max(0, halfH - (mH >> 1) + bobStalker);
+            const drawH = Math.min(screenH - mTop, mH);
+            if (drawH <= 0) continue;
+
+            const cStart = Math.max(0, (mLeft * raysPerPx) | 0);
+            const cEnd = Math.min(numRays - 1, ((mLeft + mW) * raysPerPx) | 0);
+            let visible = false;
+            for (let c = cStart; c <= cEnd; c++) {
+                if ((transformY - zBuffer[c]) < 0) { visible = true; break; }
+            }
+            if (!visible) continue;
+
+            const spCamX = Math.abs((2.0 * screenX / screenW) - 1.0);
+            const spBeam = ((effFlash - 0.0) > 0) ? Math.max(0.0, 1.0 - spCamX * 1.38) * effFlash : 0.0;
+            const spMaxVis = ((effFlash - 0.0) > 0) ? (7.5 - (-spBeam * 8.5)) : 4.2;
+            const stLight = toF64(Math.max(0.22, Math.min(1.2, 1.0 - transformY / (spMaxVis - (-2.5)))));
+
+            const bodyX = Math.max(0, mLeft);
+            const bodyW = Math.min(screenW, mLeft + mW) - bodyX;
+
+            const shadowY = Math.min(screenH - 4, mTop + drawH - 2);
+            if (bodyW > 4 && shadowY > halfH) {
+                Draw.rect(bodyX - 2, shadowY, bodyW + 4, Math.max(3, (drawH * 0.05) | 0), COL_SHADOW);
+            }
+
+            const legW = Math.max(3, (mW * 0.22) | 0);
+            const legH = (drawH * 0.34) | 0;
+            const legY = mTop + ((drawH * 0.66) | 0);
+            const legOffsetL = (stride * Math.max(2, (legH * 0.14) | 0)) | 0;
+            const lLegX = screenX - ((mW * 0.26) | 0);
+            const rLegX = screenX + ((mW * 0.06) | 0);
+            const darkLimbCol = rgba((22 * stLight) | 0, (10 * stLight) | 0, (14 * stLight) | 0, 128);
+            if (lLegX >= 0 && lLegX + legW <= screenW) {
+                Draw.rect(lLegX, Math.max(0, Math.min(screenH - legH, legY + legOffsetL)), legW, legH, darkLimbCol);
+            }
+            if (rLegX >= 0 && rLegX + legW <= screenW) {
+                Draw.rect(rLegX, Math.max(0, Math.min(screenH - legH, legY - legOffsetL)), legW, legH, darkLimbCol);
+            }
+
+            if (bodyW > 0) {
+                const torsoTop = mTop + ((drawH * 0.22) | 0);
+                const torsoH = (drawH * 0.48) | 0;
+                const tColTop = rgba(((42 * stLight) - (-dRatio * 24.0)) | 0, (14 * stLight) | 0, (18 * stLight) | 0, 128);
+                Draw.quad(
+                    bodyX, torsoTop, bodyX + bodyW, torsoTop,
+                    bodyX + ((bodyW * 0.12) | 0), torsoTop + torsoH, bodyX + ((bodyW * 0.88) | 0), torsoTop + torsoH,
+                    tColTop, tColTop, COL_TORSO_BOT, COL_TORSO_BOT
+                );
+                const ribW = (bodyW * 0.60) | 0;
+                const ribX = bodyX + ((bodyW - ribW) >> 1);
+                const ribCol = rgba((125 * stLight) | 0, (88 * stLight) | 0, (85 * stLight) | 0, 115);
+                const ribH = Math.max(2, (torsoH * 0.08) | 0);
+                Draw.rect(ribX, torsoTop + ((torsoH * 0.28) | 0), ribW, ribH, ribCol);
+                Draw.rect(ribX, torsoTop + ((torsoH * 0.56) | 0), ribW, ribH, ribCol);
+            }
+
+            const armW = Math.max(3, (mW * 0.16) | 0);
+            const armH = (drawH * 0.52) | 0;
+            const armTop = mTop + ((drawH * 0.24) | 0);
+            const armSwing = (Math.cos(frameTick * 0.24) * Math.max(2, (mW * 0.12) | 0)) | 0;
+            const leftArmX = mLeft - (armW >> 1);
+            const rightArmX = mLeft + mW - (armW >> 1);
+            const clawCol = rgba((175 * stLight) | 0, (35 * stLight) | 0, 35, 128);
+            if (leftArmX >= 0 && leftArmX + armW <= screenW) {
+                const ay = Math.max(0, Math.min(screenH - armH, armTop - armSwing));
+                Draw.rect(leftArmX, ay, armW, armH, darkLimbCol);
+                Draw.rect(leftArmX, Math.min(screenH - 3, ay + armH - 3), armW + 2, 3, clawCol);
+            }
+            if (rightArmX >= 0 && rightArmX + armW <= screenW) {
+                const ay = Math.max(0, Math.min(screenH - armH, armTop + armSwing));
+                Draw.rect(rightArmX, ay, armW, armH, darkLimbCol);
+                Draw.rect(rightArmX - 2, Math.min(screenH - 3, ay + armH - 3), armW + 2, 3, clawCol);
+            }
+
+            const headW = (mW * 0.56) | 0;
+            const headH = (drawH * 0.24) | 0;
+            const headL = screenX - (headW >> 1);
+            const headX = Math.max(0, headL);
+            const headDrawW = Math.min(screenW, headL + headW) - headX;
+            if (headDrawW > 0 && headH > 0) {
+                const skullTopCol = rgba((195 * stLight) | 0, (162 * stLight) | 0, (152 * stLight) | 0, 128);
+                const skullBotCol = rgba((115 * stLight) | 0, (72 * stLight) | 0, (70 * stLight) | 0, 128);
+                Draw.quad(
+                    headX, mTop, headX + headDrawW, mTop,
+                    headX, mTop + headH, headX + headDrawW, mTop + headH,
+                    skullTopCol, skullTopCol, skullBotCol, skullBotCol
+                );
+                const jawW = (headDrawW * 0.54) | 0;
+                const jawH = Math.max(2, (headH * (0.24 - (-dRatio * 0.22))) | 0);
+                Draw.rect(headX + ((headDrawW - jawW) >> 1), mTop + headH - jawH - 1, jawW, jawH, COL_JAW);
+            }
+
+            const eyeSize = Math.max(2, (headW * 0.22) | 0);
+            const eyeY = mTop + ((headH * 0.36) | 0);
+            const e1x = screenX - ((headW * 0.30) | 0);
+            const e2x = screenX + ((headW * 0.10) | 0);
+            if (e1x >= 2 && e1x + eyeSize + 2 <= screenW) {
+                Draw.rect(e1x - 1, eyeY - 1, eyeSize + 2, eyeSize + 2, COL_EYE_GLOW);
+                Draw.rect(e1x, eyeY, eyeSize, eyeSize, COL_EYE_RED);
+                Draw.rect(e1x + 1, eyeY + 1, Math.max(1, eyeSize - 2), Math.max(1, eyeSize - 2), COL_EYE_CORE);
+            }
+            if (e2x >= 2 && e2x + eyeSize + 2 <= screenW) {
+                Draw.rect(e2x - 1, eyeY - 1, eyeSize + 2, eyeSize + 2, COL_EYE_GLOW);
+                Draw.rect(e2x, eyeY, eyeSize, eyeSize, COL_EYE_RED);
+                Draw.rect(e2x + 1, eyeY + 1, Math.max(1, eyeSize - 2), Math.max(1, eyeSize - 2), COL_EYE_CORE);
+            }
+        } else {
+            if (colIdx < 0 || colIdx >= numRays || (transformY - zBuffer[colIdx]) >= 0) continue;
+            const itemSize = Math.max(8, (spH * 0.32) | 0);
+            const floatBob = (Math.sin((frameTick * 0.10) - (-s)) * 5.0) | 0;
+            const iy = Math.max(4, Math.min(screenH - itemSize - 4, halfH + ((spH * 0.14) | 0) + floatBob));
+            const ix = screenX - (itemSize >> 1);
+
+            if (ix < 2 || ix + itemSize > screenW - 2) continue;
+
+            if (sp.kind === "fuse") {
+                const w = Math.max(6, (itemSize * 0.78) | 0);
+                const capH = Math.max(2, (itemSize * 0.20) | 0);
+                Draw.rect(ix - 3, iy - 3, w + 6, itemSize + 6, COL_FUSE_HALO);
+                Draw.rect(ix, iy, w, itemSize, COL_FUSE_BODY);
+                Draw.rect(ix - 1, iy, w + 2, capH, COL_FUSE_CAP);
+                Draw.rect(ix - 1, iy + itemSize - capH, w + 2, capH, COL_FUSE_CAP);
+                Draw.rect(ix + ((w * 0.28) | 0), iy + capH, Math.max(2, (w * 0.44) | 0), itemSize - (capH << 1), COL_FUSE_CORE);
+            } else if (sp.kind === "battery") {
+                const w = Math.max(6, (itemSize * 0.76) | 0);
+                const termW = Math.max(2, (w * 0.44) | 0);
+                Draw.rect(ix - 3, iy - 3, w + 6, itemSize + 6, COL_BAT_HALO);
+                Draw.rect(ix + ((w - termW) >> 1), iy - 2, termW, 3, COL_BAT_TERM);
+                Draw.rect(ix, iy, w, itemSize, COL_BAT_BODY);
+                Draw.rect(ix + 1, iy + 2, Math.max(2, w - 2), Math.max(2, (itemSize * 0.25) | 0), COL_BAT_BAR1);
+                Draw.rect(ix + 1, iy + ((itemSize * 0.42) | 0), Math.max(2, w - 2), Math.max(2, (itemSize * 0.25) | 0), COL_BAT_BAR2);
+            } else if (sp.kind === "breaker") {
+                const by = Math.max(2, iy - ((itemSize * 0.45) | 0));
+                const bh = (itemSize * 1.25) | 0;
+                Draw.rect(ix - 4, by - 4, itemSize + 8, bh + 8, COL_BRK_HALO);
+                Draw.rect(ix, by, itemSize, bh, COL_BRK_OUT);
+                Draw.rect(ix + 2, by + 2, Math.max(4, itemSize - 4), Math.max(4, bh - 4), COL_BRK_IN);
+                Draw.rect(ix + ((itemSize * 0.22) | 0), by + ((bh * 0.20) | 0), Math.max(2, (itemSize * 0.56) | 0), Math.max(2, (bh * 0.26) | 0), COL_BRK_WARN);
+                Draw.rect(ix + ((itemSize * 0.35) | 0), by + ((bh * 0.55) | 0), Math.max(2, (itemSize * 0.30) | 0), Math.max(3, (bh * 0.32) | 0), COL_BRK_LEVER);
+            } else if (sp.kind === "note") {
+                const nw = Math.max(6, (itemSize * 0.82) | 0);
+                const nh = Math.max(6, (itemSize * 0.95) | 0);
+                const ny = Math.min(screenH - nh - 2, iy + 2);
+                const lineW = Math.max(2, nw - 4);
+                Draw.rect(ix - 2, ny - 2, nw + 4, nh + 4, COL_NOTE_HALO);
+                Draw.rect(ix, ny, nw, nh, COL_NOTE_PAGE);
+                Draw.rect(ix + 2, ny + ((nh * 0.30) | 0), lineW, 1, COL_NOTE_INK);
+                Draw.rect(ix + 2, ny + ((nh * 0.62) | 0), Math.max(1, (lineW * 0.65) | 0), 1, COL_NOTE_BLOOD);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. PARTICULAS ATMOSFERICAS LIGERAS (10 PARTICULAS EN EL HAZ)
+    // ------------------------------------------------------------------------
+    if (enableParticles && (effFlash - 0.05) > 0) {
+        const partCol = rgba(210, 225, 240, ((effFlash * 55.0) | 0));
+        for (let p = 0; p < 10; p++) {
+            const pxSeed = (p * 61 + 19) & 63;
+            const pySeed = (p * 37 + 11) & 63;
+            const partX = (160 + pxSeed * 5 - (((pang * 60.0) | 0) & 63)) % screenW;
+            const partY = 48 + ((pySeed * 6 + (frameTick >> 1) * ((p & 1) + 1)) % (screenH - 96));
+            Draw.rect(partX, partY, 2, 2, partCol);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 5. VIEWMODEL 3D EN PRIMERA PERSONA (MANO + LINTERNA TACTICA)
+    // ------------------------------------------------------------------------
+    if (enableViewmodel) {
+        renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, bobOffset, swayOffset, mAnim, frameTick);
+    }
+
+    // ------------------------------------------------------------------------
+    // 6. VINETA PERIMETRAL GOURAUD + INDICADOR DIRECCIONAL DE PELIGRO
+    // ------------------------------------------------------------------------
+    if (enableOverlays) {
+        const vigH = 48;
+        Draw.quad(0, 0, screenW, 0, 0, vigH, screenW, vigH, COL_VIG_DARK, COL_VIG_DARK, COL_VIG_CLEAR, COL_VIG_CLEAR);
+        Draw.quad(0, screenH - vigH, screenW, screenH - vigH, 0, screenH, screenW, screenH, COL_VIG_CLEAR, COL_VIG_CLEAR, COL_VIG_DARK, COL_VIG_DARK);
+
+        // Resplandor rojo lateral que indica hacia qué lado está El Acechador cuando está cerca
+        if ((dRatio - 0.22) > 0) {
+            const absBias = sBias < 0 ? -sBias : sBias;
+            if ((absBias - 0.18) > 0) {
+                let edgeAlpha = (dRatio * absBias * 84.0) | 0;
+                if (edgeAlpha > 88) edgeAlpha = 88;
+                const edgeCol = rgba(220, 18, 22, edgeAlpha);
+                const edgeW = 46;
+                if (sBias < 0) {
+                    Draw.quad(0, 0, edgeW, 0, 0, screenH, edgeW, screenH, edgeCol, COL_EDGE_CLEAR, edgeCol, COL_EDGE_CLEAR);
+                } else {
+                    Draw.quad(screenW - edgeW, 0, screenW, 0, screenW - edgeW, screenH, screenW, screenH, COL_EDGE_CLEAR, edgeCol, COL_EDGE_CLEAR, edgeCol);
+                }
+            }
+        }
+    }
+}
+
+function flushWallSpanDetails(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, h1, cR, cG, cB, exitUnlocked, emerFlicker) {
+    if (h0 < 16 && h1 < 16) return;
+
+    const cornH0 = Math.max(2, (h0 * 0.08) | 0);
+    const cornH1 = Math.max(2, (h1 * 0.08) | 0);
+    const cTopEnd0 = Math.min(bot0, top0 + cornH0);
+    const cTopEnd1 = Math.min(bot1, top1 + cornH1);
+    const trimCol = rgba((cR * 0.34) | 0, (cG * 0.36) | 0, (cB * 0.40) | 0, 128);
+
+    Draw.quad(x0, top0, x1, top1, x0, cTopEnd0, x1, cTopEnd1, trimCol, trimCol, trimCol, trimCol);
+
+    const baseStart0 = Math.max(top0, bot0 - cornH0);
+    const baseStart1 = Math.max(top1, bot1 - cornH1);
+    const baseCol = rgba((cR * 0.26) | 0, (cG * 0.28) | 0, (cB * 0.32) | 0, 128);
+    Draw.quad(x0, baseStart0, x1, baseStart1, x0, bot0, x1, bot1, baseCol, baseCol, baseCol, baseCol);
+
+    const spanW = x1 - x0;
+    if (spanW < 8) return;
+
+    const midX = (x0 + x1) >> 1;
+    const avgTop = (top0 + top1) >> 1;
+    const avgBot = (bot0 + bot1) >> 1;
+    const avgH = avgBot - avgTop;
+    if (avgH < 20) return;
+
+    if (hit === 1) {
+        const j0 = top0 + ((bot0 - top0) >> 1);
+        const j1 = top1 + ((bot1 - top1) >> 1);
+        const jCol = rgba((cR * 0.55) | 0, (cG * 0.58) | 0, (cB * 0.62) | 0, 128);
+        Draw.quad(x0, j0, x1, j1, x0, Math.min(bot0, j0 + 2), x1, Math.min(bot1, j1 + 2), jCol, jCol, jCol, jCol);
+    } else if (hit === 2) {
+        const p0 = top0 + ((bot0 - top0) >> 1) - 2;
+        const p1 = top1 + ((bot1 - top1) >> 1) - 2;
+        const pCol = rgba(Math.min(255, cR + 32), Math.min(255, cG + 28), Math.min(255, cB + 24), 128);
+        Draw.quad(x0, p0, x1, p1, x0, Math.min(bot0, p0 + 4), x1, Math.min(bot1, p1 + 4), pCol, pCol, pCol, pCol);
+    } else if (hit === 3) {
+        const lw = Math.max(4, (spanW * 0.32) | 0);
+        const lx = midX - (lw >> 1);
+        const ly = avgTop + ((avgH * 0.24) | 0);
+        const lh = Math.max(3, (avgH * 0.09) | 0);
+        if (ly + lh < avgBot) {
+            const glowR = Math.min(255, ((210.0 * emerFlicker) - (-45.0)) | 0);
+            const glowG = (55.0 * emerFlicker) | 0;
+            Draw.rect(lx - 2, ly - 2, lw + 4, lh + 4, rgba(glowR, 12, 12, 58));
+            Draw.rect(lx, ly, lw, lh, rgba(glowR, glowG, 35, 128));
+        }
+    } else if (hit === 4) {
+        const pw = Math.max(6, (spanW * 0.36) | 0);
+        const px0 = midX - (pw >> 1);
+        const py0 = avgTop + ((avgH * 0.42) | 0);
+        const ph = Math.max(4, (avgH * 0.16) | 0);
+        if (py0 + ph < avgBot) {
+            Draw.rect(px0 - 2, py0 - 2, pw + 4, ph + 4, COL_CHEV_DARK);
+            Draw.rect(px0, py0, pw, ph, exitUnlocked ? COL_DOOR_OPEN : COL_DOOR_LOCK);
+        }
+    }
+}
+
+function renderFlashlightViewmodel(screenW, screenH, effFlash, battery, bobOffset, swayOffset, mapAnim, frameTick) {
+    const hideOffset = (mapAnim * 120.0) | 0;
+    const safeX = GAME_SETTINGS.crtSafe ? 16 : 0;
+    const vmX = screenW - 148 - safeX + ((swayOffset * 1.6) | 0);
+    const vmY = screenH - 118 + ((bobOffset * 1.15) | 0) + hideOffset;
+    if (vmY >= screenH + 20) return;
+
+    if ((effFlash - 0.05) > 0) {
+        const lensX = vmX + 12;
+        const lensY = vmY + 8;
+        let coneAlpha = (effFlash * 38.0) | 0;
+        if (coneAlpha > 58) coneAlpha = 58;
+        const coneTipCol = rgba(225, 240, 255, coneAlpha);
+        const coneFarCol = rgba(120, 165, 220, 0);
+        Draw.triangle(
+            lensX, lensY,
+            (screenW * 0.26) | 0, (screenH * 0.34) | 0,
+            (screenW * 0.72) | 0, (screenH * 0.28) | 0,
+            coneTipCol, coneFarCol, coneFarCol
+        );
+        Draw.rect(lensX - 10, lensY - 10, 20, 20, rgba(210, 235, 255, coneAlpha));
+    }
+
+    Draw.quad(
+        vmX + 48, vmY + 54,
+        vmX + 132, vmY + 42,
+        vmX + 88, screenH + 10,
+        vmX + 165, screenH + 10,
+        COL_SLEEVE1, COL_SLEEVE2, COL_SLEEVE2, COL_SLEEVE2
+    );
+    Draw.rect(vmX + 34, vmY + 36, 44, 26, COL_GLOVE);
+    Draw.rect(vmX + 38, vmY + 32, 36, 6, COL_GLOVE_HI);
+
+    Draw.quad(
+        vmX + 18, vmY + 12,
+        vmX + 44, vmY - 4,
+        vmX + 78, vmY + 68,
+        vmX + 106, vmY + 50,
+        COL_FL_BOT, COL_FL_TOP, COL_FL_BOT, COL_FL_TOP
+    );
+    Draw.quad(
+        vmX - 2, vmY + 2,
+        vmX + 26, vmY - 16,
+        vmX + 22, vmY + 20,
+        vmX + 48, vmY + 2,
+        COL_FL_HEAD_B, COL_FL_HEAD_T, COL_FL_HEAD_B, COL_FL_HEAD_T
+    );
+
+    Draw.rect(vmX + 6, vmY - 2, 12, 12, ((effFlash - 0.05) > 0) ? COL_LENS_ON : COL_LENS_OFF);
+    const lowBat = (battery - 25.0) < 0;
+    const ledCol = ((effFlash - 0.05) <= 0)
+        ? COL_LED_OFF
+        : (lowBat && ((frameTick & 15) < 8))
+            ? COL_LED_LOW
+            : COL_LED_OK;
+    Draw.rect(vmX + 44, vmY + 18, 6, 4, ledCol);
+}
+
+// PDA Tactico animado (se desliza desde abajo y despliega al presionar SELECT o L2)
+function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities, dangerRatio, mapAnim, frameTick, fnt) {
+    const mAnim = toF64(mapAnim);
+    const dRatio = toF64(dangerRatio);
+    if ((mAnim - 0.01) <= 0) return;
+
+    const inv = 1.0 - mAnim;
+    const ease = 1.0 - (inv * inv * inv);
+    const panelW = 368;
+    const panelH = 290;
+    const targetY = (screenH - panelH) >> 1;
+    const ox = (screenW - panelW) >> 1;
+    const oy = (screenH - (-((targetY - screenH) * ease))) | 0;
+
+    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 0, (75 * ease) | 0));
+    Draw.rect(ox - 6, oy - 6, panelW + 12, panelH + 12, rgba(28, 46, 32, 124));
+    Draw.rect(ox, oy, panelW, panelH, rgba(6, 14, 9, 126));
+
+    Draw.rect(ox, oy, panelW, 28, rgba(14, 38, 20, 126));
+    fnt.scale = Math.fround(0.48);
+    fnt.color = rgba(110, 245, 140, 128);
+    fnt.print(ox + 10, oy + 6, "PLANO SUBSUELO 04 [SELECT / L2]");
+
+    const cellPx = 11;
+    const mapPx = MAP_W * cellPx;
+    const mx0 = ox + 16;
+    const my0 = oy + 42;
+
+    const colExit = rgba(60, 235, 110, 128);
+    const colGate = rgba(235, 165, 55, 128);
+    const colRit  = rgba(165, 45, 45, 128);
+    const colWall = rgba(55, 115, 70, 120);
+
+    for (let y = 0; y < MAP_H; y++) {
+        let x = 0;
+        const row = grid[y];
+        while (x < MAP_W) {
+            const v = row[x];
+            if (v > 0) {
+                let run = 1;
+                while (x + run < MAP_W && row[x + run] === v) run++;
+                const col = (v === 4) ? colExit : (v === 5) ? colGate : (v === 3) ? colRit : colWall;
+                Draw.rect(mx0 + x * cellPx, my0 + y * cellPx, run * cellPx - 1, cellPx - 1, col);
+                x += run;
+            } else {
+                x++;
+            }
+        }
+    }
+
+    const scanY = my0 + ((frameTick * 3) % mapPx);
+    Draw.rect(mx0, scanY, mapPx, 2, rgba(80, 255, 120, 52));
+
+    for (let i = 0; i < entities.length; i++) {
+        const e = entities[i];
+        if (e.taken) continue;
+        const ec = (e.kind === "fuse") ? rgba(255, 220, 60, 128)
+                 : (e.kind === "battery") ? rgba(60, 230, 255, 128)
+                 : (e.kind === "breaker") ? rgba(255, 75, 75, 128)
+                 : rgba(235, 235, 245, 128);
+        Draw.rect(mx0 + ((toF64(e.x) * cellPx) | 0) - 2, my0 + ((toF64(e.y) * cellPx) | 0) - 2, 5, 5, ec);
+    }
+
+    if ((dRatio - 0.18) > 0 && ((frameTick & 15) < 10)) {
+        Draw.rect(mx0 + ((toF64(stalker.x) * cellPx) | 0) - 3, my0 + ((toF64(stalker.y) * cellPx) | 0) - 3, 7, 7, rgba(255, 35, 35, 128));
+    }
+
+    const px = mx0 + ((toF64(player.x) * cellPx) | 0);
+    const py = my0 + ((toF64(player.y) * cellPx) | 0);
+    const pang = toF64(player.ang);
+    Draw.rect(px - 3, py - 3, 6, 6, rgba(120, 255, 150, 128));
+    Draw.line(px, py, px + ((Math.cos(pang) * 14.0) | 0), py + ((Math.sin(pang) * 14.0) | 0), rgba(150, 255, 180, 128));
+
+    fnt.scale = Math.fround(0.42);
+    fnt.color = rgba(130, 245, 155, 128);
+    fnt.print(mx0 + (mapPx >> 1) - 4, my0 - 12, "N");
+    fnt.print(mx0 + (mapPx >> 1) - 4, my0 + mapPx + 2, "S");
+    fnt.print(mx0 - 11, my0 + (mapPx >> 1) - 5, "O");
+    fnt.print(mx0 + mapPx + 3, my0 + (mapPx >> 1) - 5, "E");
+
+    const lx = mx0 + mapPx + 14;
+    fnt.scale = Math.fround(0.44);
+    fnt.color = rgba(120, 255, 150, 128); fnt.print(lx, my0 + 8,  "TU POSICION");
+    fnt.color = rgba(255, 220, 60, 128);  fnt.print(lx, my0 + 34, "FUSIBLES");
+    fnt.color = rgba(255, 75, 75, 128);   fnt.print(lx, my0 + 60, "DISYUNTOR");
+    fnt.color = rgba(60, 230, 255, 128);  fnt.print(lx, my0 + 86, "BATERIAS");
+    fnt.color = rgba(235, 235, 245, 128); fnt.print(lx, my0 + 112,"NOTAS");
+    fnt.color = rgba(60, 235, 110, 128);  fnt.print(lx, my0 + 138,"SALIDA NORTE");
+    if ((dRatio - 0.18) > 0) {
+        fnt.color = rgba(255, 50, 50, 128);
+        fnt.print(lx, my0 + 174, "! ANOMALIA !");
+    }
+}
+
+// --- MODULE: src/menus.js ---
+// ============================================================================
+// Interfaz completa de Menús PS2 (Título, Opciones, Pausa, Expediente, Finales)
+// Diseñada con área segura CRT para evitar recortes por overscan en TV reales
+// ============================================================================
+
+
+
+
+const COL_BG_DIM     = rgba(0, 0, 4, 88);
+const COL_BORDER_RED = rgba(120, 26, 30, 122);
+const COL_PANEL_BG   = rgba(8, 6, 10, 122);
+const COL_HEADER_BG  = rgba(34, 10, 14, 124);
+const COL_SEL_BG     = rgba(115, 22, 28, 118);
+const COL_SEL_BAR    = rgba(245, 65, 65, 128);
+const COL_TITLE_RED  = rgba(242, 48, 48, 128);
+const COL_WHITE      = rgba(236, 236, 242, 128);
+const COL_MUTED      = rgba(155, 160, 172, 128);
+const COL_GOLD       = rgba(250, 215, 95, 128);
+const COL_CYAN       = rgba(85, 225, 255, 128);
+const COL_GREEN      = rgba(95, 245, 135, 128);
+
+function getSafeMargins() {
+    return GAME_SETTINGS.crtSafe
+        ? { sx: 28, sy: 18 }
+        : { sx: 10, sy: 6 };
+}
+
+function drawPanel(x, y, w, h, title, fnt, accentCol = COL_BORDER_RED) {
+    Draw.rect(x - 3, y - 3, w + 6, h + 6, accentCol);
+    Draw.rect(x, y, w, h, COL_PANEL_BG);
+    if (title) {
+        Draw.rect(x, y, w, 30, COL_HEADER_BG);
+        Draw.rect(x, y + 30, w, 1, accentCol);
+        fnt.scale = Math.fround(0.62);
+        fnt.color = COL_WHITE;
+        fnt.print(x + 14, y + 6, title);
+    }
+}
+
+function formatTime(secs) {
+    const m = (secs / 60) | 0;
+    const s = secs % 60;
+    return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
+
+    // Línea de barrido VHS sutil en pantalla de título
+    if (GAME_SETTINGS.overlays) {
+        const scanY = (frameTick * 3) % screenH;
+        Draw.rect(0, scanY, screenW, 3, rgba(220, 45, 45, 26));
+    }
+
+    const panelW = screenW - sx * 2 - 20;
+    const panelH = screenH - sy * 2 - 16;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, null, fnt);
+
+    // Cabecera cinematográfica
+    Draw.rect(px, py, panelW, 84, rgba(26, 6, 10, 124));
+    Draw.rect(px, py + 84, panelW, 2, COL_SEL_BAR);
+
+    const flicker = ((frameTick % 131) < 4) ? 0.55 : 1.0;
+    fnt.scale = Math.fround(1.05);
+    fnt.color = rgba((242 * flicker) | 0, (44 * flicker) | 0, (44 * flicker) | 0, 128);
+    fnt.print(px + 22, py + 14, "SUBSUELO 04");
+
+    fnt.scale = Math.fround(0.56);
+    fnt.color = COL_GOLD;
+    fnt.print(px + 24, py + 54, "EL ACECHADOR  |  PS2 SURVIVAL HORROR EDITION");
+
+    // Insignia de récord / Memory Card
+    fnt.scale = Math.fround(0.44);
+    const best = GAME_SETTINGS.difficulty === 1 ? RECORDS.bestNightmareSec : RECORDS.bestNormalSec;
+    if (best > 0) {
+        fnt.color = COL_GREEN;
+        fnt.print(px + panelW - 185, py + 20, "RECORD: " + formatTime(best));
+    } else {
+        fnt.color = COL_MUTED;
+        fnt.print(px + panelW - 185, py + 20, "PS2 REAL READY");
+    }
+    fnt.color = RECORDS.mcAvailable ? COL_CYAN : COL_MUTED;
+    fnt.print(px + panelW - 185, py + 38, RECORDS.mcAvailable ? "MC0: DETECTADA" : "MC0: SIN GUARDADO");
+
+    // Opciones del Menú Principal
+    const items = [
+        "NUEVA PARTIDA   < " + DIFF_LABELS[GAME_SETTINGS.difficulty] + " >",
+        "OPCIONES Y VIDEO PS2",
+        "CONTROLES DUALSHOCK 2",
+        "EXPEDIENTE / HISTORIA",
+        "CREDITOS Y HARDWARE"
+    ];
+
+    const listY = py + 106;
+    const rowH = 38;
+    for (let i = 0; i < items.length; i++) {
+        const ry = listY + i * rowH;
+        const selected = (i === cursor);
+        if (selected) {
+            Draw.rect(px + 20, ry - 4, panelW - 40, 30, COL_SEL_BG);
+            Draw.rect(px + 20, ry - 4, 5, 30, COL_SEL_BAR);
+        }
+        fnt.scale = Math.fround(selected ? 0.64 : 0.56);
+        fnt.color = selected ? COL_GOLD : COL_WHITE;
+        fnt.print(px + (selected ? 38 : 34), ry + 1, (selected ? "> " : "  ") + items[i]);
+    }
+
+    // Pie de navegación
+    const footY = py + panelH - 36;
+    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.44);
+    fnt.color = COL_MUTED;
+    fnt.print(px + 20, footY, "[ARRIBA/ABAJO] Elegir   [IZQ/DER] Dificultad   [X/START] Aceptar");
+}
+
+function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
+
+    const panelW = screenW - sx * 2 - 12;
+    const panelH = screenH - sy * 2 - 12;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, "OPCIONES DE SISTEMA Y VIDEO PS2", fnt);
+
+    const rows = [
+        { label: "CALIDAD 3D (RAYOS)",   val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
+        { label: "MARGEN TV CRT",        val: GAME_SETTINGS.crtSafe ? "SEGURO (CRT)" : "COMPLETO (HD)" },
+        { label: "SENSIBILIDAD CAMARA",  val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
+        { label: "VIBRACION DUALSHOCK2", val: GAME_SETTINGS.rumble ? "ACTIVADA" : "DESACTIVADA" },
+        { label: "EFECTOS VHS / POLVO",  val: GAME_SETTINGS.overlays ? "ACTIVADOS" : "DESACTIVADOS" },
+        { label: "AUDIO AMBIENTE",       val: isAudioReady() ? (GAME_SETTINGS.audioVolume + "%") : "NO DISPONIBLE" },
+        { label: "CONTADOR DE FPS",      val: GAME_SETTINGS.showFps ? "VISIBLE" : "OCULTO" },
+        { label: "GUARDAR Y VOLVER",     val: "[X]" }
+    ];
+
+    const startY = py + 44;
+    const rowH = 34;
+    for (let i = 0; i < rows.length; i++) {
+        const ry = startY + i * rowH;
+        const sel = (i === cursor);
+        if (sel) {
+            Draw.rect(px + 14, ry - 3, panelW - 28, 28, COL_SEL_BG);
+            Draw.rect(px + 14, ry - 3, 4, 28, COL_SEL_BAR);
+        }
+        fnt.scale = Math.fround(0.52);
+        fnt.color = sel ? COL_GOLD : COL_WHITE;
+        fnt.print(px + 26, ry + 2, rows[i].label);
+
+        fnt.color = sel ? COL_CYAN : COL_MUTED;
+        const valText = (i < rows.length - 1) ? ("< " + rows[i].val + " >") : rows[i].val;
+        fnt.print(px + panelW - 215, ry + 2, valText);
+    }
+
+    const footY = py + panelH - 34;
+    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.44);
+    if (saveFeedbackTimer > 0) {
+        fnt.color = COL_GREEN;
+        fnt.print(px + 18, footY, "Ajustes aplicados (guardados en Memory Card si esta disponible).");
+    } else {
+        fnt.color = COL_MUTED;
+        fnt.print(px + 18, footY, "[IZQ/DER] Cambiar valor   [X] Aceptar   [CIRCULO] Volver");
+    }
+}
+
+function drawControlsMenu(screenW, screenH, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
+
+    const panelW = screenW - sx * 2 - 12;
+    const panelH = screenH - sy * 2 - 12;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, "CONTROLES DUALSHOCK 2", fnt);
+
+    const bindings = [
+        ["STICK IZQ / D-PAD",  "Caminar y desplazamiento lateral"],
+        ["STICK DER / L1-R1",  "Girar camara en primera persona"],
+        ["CIRCULO / CUADRADO", "Correr (consume stamina y genera ruido)"],
+        ["TRIANGULO",          "Encender / apagar linterna tactica"],
+        ["SELECT / L2",        "Desplegar u ocultar plano PDA"],
+        ["START",              "Pausar partida / abrir menu"],
+        ["R2",                 "Alternar diagnostico tecnico en juego"]
+    ];
+
+    let y = py + 48;
+    for (let i = 0; i < bindings.length; i++) {
+        Draw.rect(px + 16, y - 3, panelW - 32, 26, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
+        fnt.scale = Math.fround(0.50);
+        fnt.color = COL_GOLD;
+        fnt.print(px + 24, y + 1, bindings[i][0]);
+        fnt.color = COL_WHITE;
+        fnt.print(px + 215, y + 1, bindings[i][1]);
+        y += 32;
+    }
+
+    fnt.scale = Math.fround(0.46);
+    fnt.color = COL_CYAN;
+    fnt.print(px + 22, y + 10, "CONSEJO: Apaga la linterna para esconderte o ilumina al Acechador de frente.");
+
+    const footY = py + panelH - 32;
+    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.46);
+    fnt.color = COL_GOLD;
+    fnt.print(px + 20, footY, "Presiona [X] o [CIRCULO] para volver");
+}
+
+function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPause, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
+
+    const panelW = screenW - sx * 2 - 12;
+    const panelH = screenH - sy * 2 - 12;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    const title = fromPause ? "REGISTROS RECOLECTADOS" : "EXPEDIENTE - SUBSUELO 04";
+    drawPanel(px, py, panelW, panelH, title, fnt);
+
+    // Pestañas superiores para elegir nota 1..4
+    const tabW = ((panelW - 44) / 4) | 0;
+    for (let i = 0; i < LORE_NOTES.length; i++) {
+        const tx = px + 16 + i * (tabW + 4);
+        const sel = (i === selectedNoteIdx);
+        const unlocked = !fromPause || collectedNotes[i];
+        Draw.rect(tx, py + 42, tabW, 24, sel ? COL_SEL_BG : rgba(20, 18, 24, 110));
+        if (sel) Draw.rect(tx, py + 64, tabW, 2, COL_SEL_BAR);
+        fnt.scale = Math.fround(0.45);
+        fnt.color = sel ? COL_GOLD : (unlocked ? COL_WHITE : COL_MUTED);
+        fnt.print(tx + 8, py + 47, unlocked ? ("NOTA #0" + (i + 1)) : ("BLOQ #0" + (i + 1)));
+    }
+
+    const note = LORE_NOTES[selectedNoteIdx];
+    const unlocked = !fromPause || collectedNotes[selectedNoteIdx];
+    const bodyY = py + 82;
+
+    if (unlocked) {
+        fnt.scale = Math.fround(0.56);
+        fnt.color = COL_GOLD;
+        fnt.print(px + 20, bodyY, note.code);
+
+        fnt.scale = Math.fround(0.49);
+        fnt.color = COL_WHITE;
+        for (let l = 0; l < note.lines.length; l++) {
+            fnt.print(px + 20, bodyY + 34 + l * 26, note.lines[l]);
+        }
+    } else {
+        fnt.scale = Math.fround(0.56);
+        fnt.color = COL_MUTED;
+        fnt.print(px + 20, bodyY + 24, "REGISTRO NO ENCONTRADO EN ESTA PARTIDA");
+        fnt.scale = Math.fround(0.48);
+        fnt.print(px + 20, bodyY + 62, "Explora los pasillos del Subsuelo 04 y recoge las hojas");
+        fnt.print(px + 20, bodyY + 88, "blancas marcadas en el plano PDA para desbloquearlo.");
+    }
+
+    const footY = py + panelH - 32;
+    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.45);
+    fnt.color = COL_MUTED;
+    fnt.print(px + 18, footY, "[IZQ/DER] Cambiar registro   [X / CIRCULO] Volver");
+}
+
+function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
+
+    const panelW = screenW - sx * 2 - 12;
+    const panelH = screenH - sy * 2 - 12;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, "CREDITOS E INFORMACION DEL SISTEMA", fnt);
+
+    fnt.scale = Math.fround(0.62);
+    fnt.color = COL_TITLE_RED;
+    fnt.print(px + 22, py + 48, "SUBSUELO 04: EL ACECHADOR");
+
+    fnt.scale = Math.fround(0.50);
+    fnt.color = COL_WHITE;
+    fnt.print(px + 22, py + 84,  "Diseno y Desarrollo: Joaquin Gasperetti");
+    fnt.print(px + 22, py + 112, "Motor Runtime PS2:   AthenaEnv V4 (QuickJS + GS)");
+    fnt.print(px + 22, py + 140, "Render 3D:           Raycaster DDA + Span Batching Gouraud");
+
+    Draw.rect(px + 20, py + 174, panelW - 40, 1, rgba(70, 50, 55, 110));
+
+    fnt.color = COL_GOLD;
+    fnt.print(px + 22, py + 188, "TELEMETRIA DE CONSOLA:");
+    fnt.scale = Math.fround(0.47);
+    fnt.color = COL_CYAN;
+    fnt.print(px + 22, py + 216, "Modo de video: " + screenW + "x" + screenH + " (" + modeInfo.vmodeLabel + ")");
+    fnt.print(px + 22, py + 240, "Audio PS2 (audsrv): " + (isAudioReady() ? "ACTIVO (ambient.wav)" : "INACTIVO"));
+    fnt.print(px + 22, py + 264, "Memory Card (mc0):  " + (RECORDS.mcAvailable ? "DISPONIBLE" : "NO DETECTADA"));
+    fnt.print(px + 22, py + 288, "Escapes totales: " + RECORDS.escapes);
+
+    const footY = py + panelH - 32;
+    Draw.rect(px, footY - 8, panelW, 1, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.46);
+    fnt.color = COL_GOLD;
+    fnt.print(px + 20, footY, "Presiona [X] o [CIRCULO] para volver");
+}
+
+function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 6, 98));
+
+    const panelW = Math.min(430, screenW - sx * 2);
+    const panelH = 290;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, "PAUSA - SUBSUELO 04", fnt);
+
+    const items = [
+        "CONTINUAR PARTIDA",
+        "OPCIONES Y VIDEO PS2",
+        "REGISTROS (" + notesFoundCount + "/4)",
+        "CONTROLES",
+        "REINICIAR PARTIDA",
+        "VOLVER AL MENU PRINCIPAL"
+    ];
+
+    const startY = py + 46;
+    const rowH = 34;
+    for (let i = 0; i < items.length; i++) {
+        const ry = startY + i * rowH;
+        const sel = (i === cursor);
+        if (sel) {
+            Draw.rect(px + 16, ry - 3, panelW - 32, 28, COL_SEL_BG);
+            Draw.rect(px + 16, ry - 3, 4, 28, COL_SEL_BAR);
+        }
+        fnt.scale = Math.fround(0.54);
+        fnt.color = sel ? COL_GOLD : COL_WHITE;
+        fnt.print(px + (sel ? 32 : 28), ry + 1, (sel ? "> " : "  ") + items[i]);
+    }
+
+    fnt.scale = Math.fround(0.42);
+    fnt.color = COL_MUTED;
+    fnt.print(px + 18, py + panelH - 24, "[X] Seleccionar   [START/CIRCULO] Continuar");
+}
+
+function drawNoteOverlay(screenW, screenH, noteIdx, fnt) {
+    const { sx } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 6, 96));
+
+    const note = LORE_NOTES[noteIdx] || LORE_NOTES[0];
+    const panelW = Math.min(540, screenW - sx * 2);
+    const panelH = 248;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, note.code, fnt, rgba(160, 175, 200, 120));
+
+    fnt.scale = Math.fround(0.49);
+    fnt.color = COL_WHITE;
+    for (let l = 0; l < note.lines.length; l++) {
+        fnt.print(px + 18, py + 46 + l * 28, note.lines[l]);
+    }
+
+    Draw.rect(px, py + panelH - 36, panelW, 1, rgba(80, 90, 110, 110));
+    fnt.scale = Math.fround(0.46);
+    fnt.color = COL_GOLD;
+    fnt.print(px + 18, py + panelH - 26, "Presiona [X] o [CIRCULO] para guardar registro y continuar");
+}
+
+function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, difficulty, fnt) {
+    const { sx } = getSafeMargins();
+    const tint = isWin ? rgba(4, 26, 12, 98) : rgba(48, 0, 6, 106);
+    const accent = isWin ? rgba(65, 210, 110, 124) : COL_BORDER_RED;
+    Draw.rect(0, 0, screenW, screenH, tint);
+
+    const panelW = Math.min(520, screenW - sx * 2);
+    const panelH = 286;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, isWin ? "EVACUACION COMPLETADA" : "SENAL PERDIDA - TE ALCANZO", fnt, accent);
+
+    if (isWin) {
+        let rank = "C";
+        if (secs <= 95 && notesFound >= 3) rank = "S";
+        else if (secs <= 135) rank = "A";
+        else if (secs <= 190) rank = "B";
+
+        fnt.scale = Math.fround(0.74);
+        fnt.color = COL_GREEN;
+        fnt.print(px + 20, py + 46, "ESCAPASTE DEL SUBSUELO 04!");
+
+        fnt.scale = Math.fround(0.52);
+        fnt.color = COL_WHITE;
+        fnt.print(px + 20, py + 88,  "Tiempo de escape: " + formatTime(secs) + " (" + secs + "s)");
+        fnt.print(px + 20, py + 114, "Dificultad:       " + DIFF_LABELS[difficulty]);
+        fnt.print(px + 20, py + 140, "Registros:        " + notesFound + "/4");
+
+        fnt.scale = Math.fround(1.1);
+        fnt.color = COL_GOLD;
+        fnt.print(px + panelW - 115, py + 92, "RANGO " + rank);
+    } else {
+        fnt.scale = Math.fround(0.72);
+        fnt.color = COL_TITLE_RED;
+        fnt.print(px + 20, py + 50, "EL ACECHADOR TE ATRAPO");
+
+        fnt.scale = Math.fround(0.50);
+        fnt.color = COL_WHITE;
+        fnt.print(px + 20, py + 96,  "Tiempo sobrevivido: " + formatTime(secs));
+        fnt.color = COL_CYAN;
+        fnt.print(px + 20, py + 128, "Consejo: Apaga la linterna [TRIANGULO] para ocultarte");
+        fnt.print(px + 20, py + 152, "o enfoca directamente sus ojos para frenarlo.");
+    }
+
+    const opts = [isWin ? "JUGAR DE NUEVO" : "REINTENTAR", "VOLVER AL MENU PRINCIPAL"];
+    const optY = py + 190;
+    for (let i = 0; i < opts.length; i++) {
+        const ry = optY + i * 36;
+        const sel = (i === cursor);
+        if (sel) {
+            Draw.rect(px + 20, ry - 3, panelW - 40, 28, isWin ? rgba(20, 88, 42, 118) : COL_SEL_BG);
+            Draw.rect(px + 20, ry - 3, 4, 28, isWin ? COL_GREEN : COL_SEL_BAR);
+        }
+        fnt.scale = Math.fround(0.54);
+        fnt.color = sel ? COL_GOLD : COL_WHITE;
+        fnt.print(px + 34, ry + 1, (sel ? "> " : "  ") + opts[i]);
+    }
+}
+
+function drawPadDisconnectedOverlay(screenW, screenH, fnt) {
+    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 0, 112));
+    const pw = 440;
+    const ph = 110;
+    const px = (screenW - pw) >> 1;
+    const py = (screenH - ph) >> 1;
+    drawPanel(px, py, pw, ph, "MANDO DESCONECTADO", fnt);
+    fnt.scale = Math.fround(0.52);
+    fnt.color = COL_GOLD;
+    fnt.print(px + 20, py + 52, "Conecta un DualShock 2 en el Puerto 1 para continuar.");
+}
+
+// --- MODULE: main.js ---
+// ============================================================================
 // SUBSUELO 04: EL ACECHADOR (PS2 3D Survival Horror - AthenaEnv V4)
 // Optimizado para PlayStation 2 real (Emotion Engine 294MHz + GS + CRT)
 // Arranque inmediato sin llamadas bloqueantes a MC0 ni Sound.Stream al iniciar
 // ============================================================================
 
-import { createWorldGrid, isPosWalkable, getCell, LORE_NOTES } from "./src/map.js";
-import { AI_PATROL, updateStalkerAI } from "./src/ai.js";
-import { render3DWorld, renderAnimatedMapPDA, renderStats } from "./src/renderer.js";
-import {
-    GAME_SETTINGS, SENS_TURN_SPEED, STICK_DEADZONE,
-    F64_ZERO, toF64, fadd, clampF64, rgba, requestGC
-} from "./src/config.js";
-import { saveGameData, recordEscape } from "./src/storage.js";
-import { initAudio, applyAudioVolume, isAudioReady } from "./src/audio.js";
-import {
-    getSafeMargins, drawTitleMenu, drawOptionsMenu, drawControlsMenu,
-    drawLoreMenu, drawCreditsMenu, drawPauseMenu, drawNoteOverlay,
-    drawEndScreen, drawPadDisconnectedOverlay
-} from "./src/menus.js";
+
+
+
+
+
 
 const screenMode = Screen.getMode();
 const SCREEN_W = (screenMode && screenMode.width) ? screenMode.width : 640;
@@ -772,3 +2700,4 @@ Screen.display(() => {
         runtimeErr = String(e) + " | " + String(e && e.stack ? e.stack : "").replace(/\n/g, " ");
     }
 });
+
