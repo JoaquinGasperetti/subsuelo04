@@ -497,7 +497,8 @@ const LORE_NOTES = [
         lines: [
             "ORDEN DE EMERGENCIA - SALIDA NORTE",
             "La compuerta blindada al Norte (arriba",
-            "en el PDA) requiere los 4 FUSIBLES.",            "Cuando el panel pase a VERDE, corre",
+            "en el PDA) requiere los 4 FUSIBLES.",
+            "Cuando el panel pase a VERDE, corre",
             "hacia la salida. No mires atras."
         ]
     }
@@ -995,7 +996,8 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (obj) {
             obj.position = { x: 0.0, y: 0.0, z: 0.0 };
             obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
-        }        return obj;
+        }
+        return obj;
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error carga 3D";
         return null;
@@ -1022,7 +1024,9 @@ function updateHw3dProjection() {
     if (hw3dLastWide === isWide) return;
     hw3dLastWide = isWide;
     try {
-        Render.setView(isWide ? 60.0 : 54.0, 1.0, 2000.0);
+        // El mapa mide ~40 unidades; un far plane corto mejora mucho la precision
+        // del Z16S de PS2 y evita z-fighting al caminar o girar.
+        Render.setView(isWide ? 60.0 : 54.0, 1.0, 80.0);
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error Render.setView";
     }
@@ -1375,14 +1379,23 @@ function renderHardware3DWorld(
     // Activar Z-buffer (DEPTH_TEST_ENABLE) durante el pase 3D VU1 y desactivarlo para 2D/HUD
     const hasDepthToggle = (typeof Screen.setParam === "function" && typeof Screen.DEPTH_TEST_ENABLE !== "undefined");
     if (hasDepthToggle) {
-        try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, true); } catch (_) {}
+        try {
+            // AthenaEnv renderiza con Z invertido: fijar GEQUAL explicitamente evita
+            // depender del estado GS que haya dejado el menu o un pase 2D anterior.
+            if (typeof Screen.DEPTH_TEST_METHOD !== "undefined" && typeof Screen.DEPTH_GEQUAL !== "undefined") {
+                Screen.setParam(Screen.DEPTH_TEST_METHOD, Screen.DEPTH_GEQUAL);
+            }
+            Screen.setParam(Screen.DEPTH_TEST_ENABLE, true);
+        } catch (_) {}
     }
     try {
         if (typeof Render.begin === "function") {
             Render.begin();
         }
-        Camera.position(camX, WORLD_EYE_H, camZ);
+        // AthenaEnv Camera.target también ajusta camera_position usando el target anterior.
+        // Fijar la posición después del target evita desplazar la cámara al girar o caminar.
         Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
+        Camera.position(camX, WORLD_EYE_H, camZ);
         Camera.update();
 
         // Actualizar luz principal solo cuando cambia la linterna (cero spam a C por cuadro)
@@ -1492,7 +1505,8 @@ function render3DWorld(
     const dRatio = toF64(dangerRatio);
     const fovVal = toF64(fov);
     const fInt = toF64(flashIntensity);
-    const mAnim = toF64(mapAnim);    const sBias = toF64(sideBias);
+    const mAnim = toF64(mapAnim);
+    const sBias = toF64(sideBias);
 
     const enableBob = GAME_SETTINGS.bob;
     const enableOverlays = GAME_SETTINGS.overlays;
@@ -1991,7 +2005,8 @@ function render3DWorld(
                 const by = Math.max(2, iy - ((itemSize * 0.45) | 0));
                 const bh = (itemSize * 1.25) | 0;
                 Draw.rect(ix - 4, by - 4, itemSize + 8, bh + 8, COL_BRK_HALO);
-                Draw.rect(ix, by, itemSize, bh, COL_BRK_OUT);                Draw.rect(ix + 2, by + 2, Math.max(4, itemSize - 4), Math.max(4, bh - 4), COL_BRK_IN);
+                Draw.rect(ix, by, itemSize, bh, COL_BRK_OUT);
+                Draw.rect(ix + 2, by + 2, Math.max(4, itemSize - 4), Math.max(4, bh - 4), COL_BRK_IN);
                 Draw.rect(ix + ((itemSize * 0.22) | 0), by + ((bh * 0.20) | 0), Math.max(2, (itemSize * 0.56) | 0), Math.max(2, (bh * 0.26) | 0), COL_BRK_WARN);
                 Draw.rect(ix + ((itemSize * 0.35) | 0), by + ((bh * 0.55) | 0), Math.max(2, (itemSize * 0.30) | 0), Math.max(3, (bh * 0.32) | 0), COL_BRK_LEVER);
             } else if (sp.kind === "note") {
@@ -2490,7 +2505,8 @@ function drawControlsMenu(screenW, screenH, fnt) {
     drawPanel(px, py, panelW, panelH, "CONTROLES DUALSHOCK 2", fnt);
 
     const bindings = [
-        ["STICK IZQ / D-PAD",  "Caminar y moverse"],        ["STICK DER / L1-R1",  "Girar la camara"],
+        ["STICK IZQ / D-PAD",  "Caminar y moverse"],
+        ["STICK DER / L1-R1",  "Girar la camara"],
         ["CIRCULO / CUAD.",    "Correr (usa stamina)"],
         ["TRIANGULO",          "Linterna ON / OFF"],
         ["SELECT / L2",        "Abrir / cerrar mapa PDA"],
@@ -2989,7 +3005,8 @@ function triggerScreenFlash(r, g, b, alpha) {
 }
 
 function showPopup(msg, duration = 70) {
-    popupText = msg;    popupTimer = duration;
+    popupText = msg;
+    popupTimer = duration;
 }
 
 function showRadio(msg, duration = 220) {
@@ -3488,7 +3505,8 @@ Screen.display(() => {
                             notesFoundCount++;
                         }
                         activeNoteIdx = e.msgIdx;
-                        triggerScreenFlash(220, 230, 255, 38);                        showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
+                        triggerScreenFlash(220, 230, 255, 38);
+                        showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
                         switchState(STATE_NOTE_VIEW);
                         return;
                     }
