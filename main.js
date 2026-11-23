@@ -1022,6 +1022,7 @@ let hw3dLastWide = null;
 let hwLightMain = -1;
 let hwLightFill = -1;
 let hwStaticObjs = [];
+let hwWallChunks = [];
 let hwGatesObj = null;
 let hwPropObjs = {};
 let hwEntityTransforms = [];
@@ -1032,6 +1033,7 @@ let hwStalkerObj = null;
 // Referencias globales para evitar que el GC de QuickJS libere Image/RenderData en uso por RenderObject
 const hwKeptTextures = [];
 const hwKeptRenderData = [];
+const hwTextureCache = {};
 let hwStalkerIsGltf = false;
 let hwStalkerSource = "NONE";
 
@@ -1083,36 +1085,61 @@ const HW3D_STREAM_STEPS = [
     { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEMS: NOTAS" }
 ];
 
-const MAP_PCT_LABELS = [
-    "0%   (0/13)",  "8%   (1/13)",  "15%  (2/13)", "23%  (3/13)",
-    "31%  (4/13)",  "38%  (5/13)",  "46%  (6/13)", "54%  (7/13)",
-    "62%  (8/13)",  "69%  (9/13)",  "77%  (10/13)", "85% (11/13)",
-    "92%  (12/13)", "100% (13/13)"
+const HW_MAP_CHUNK_CELLS = 4;
+const HW_MAP_SIZE_CELLS = 20;
+const HW_WALL_MATERIALS = [
+    { name: "concrete", tex: "assets/textures/wall_concrete.png", label: "HORMIGON" },
+    { name: "rust", tex: "assets/textures/wall_rust.png", label: "ESTRUCTURAS" },
+    { name: "ritual", tex: "assets/textures/wall_ritual.png", label: "RITUAL" }
 ];
 
-const STREAM_3D_BADGES = [
-    "3D: 0/13",  "3D: 1/13",  "3D: 2/13",  "3D: 3/13",
-    "3D: 4/13",  "3D: 5/13",  "3D: 6/13",  "3D: 7/13",
-    "3D: 8/13",  "3D: 9/13",  "3D: 10/13", "3D: 11/13",
-    "3D: 12/13", "3D VU1 LISTO"
-];
+function buildWallChunkStreamSteps() {
+    const steps = [];
+    const chunkCount = Math.ceil(HW_MAP_SIZE_CELLS / HW_MAP_CHUNK_CELLS);
+    for (let cz = 0; cz < chunkCount; cz++) {
+        for (let cx = 0; cx < chunkCount; cx++) {
+            for (let m = 0; m < HW_WALL_MATERIALS.length; m++) {
+                const material = HW_WALL_MATERIALS[m];
+                const path = "assets/models/map_walls_" + material.name + "_c" + cx + "_" + cz + ".obj";
+                if (!fileExistsSafe(path)) continue;
+                steps.push({
+                    kind: "wall_chunk", obj: path, tex: material.tex, clip: true,
+                    chunkX: cx, chunkZ: cz, label: "PAREDES: " + material.label
+                });
+            }
+        }
+    }
+    if (steps.length > 0) return steps;
+    return HW3D_STREAM_STEPS.slice(3, 6).map(function (step) {
+        return { kind: "static", obj: step.obj, tex: step.tex, clip: step.clip, label: step.label };
+    });
+}
 
-function loadHwMesh(objPath, texPath, accurateClip = false) {
+HW3D_STREAM_STEPS.splice(3, 3, ...buildWallChunkStreamSteps());
+
+function loadHwMesh(objPath, texPath, accurateClip = false, dataOut = null) {
     if (!fileExistsSafe(objPath)) return null;
     try {
         let tex = null;
         if (texPath && fileExistsSafe(texPath)) {
-            tex = new Image(texPath);
-            if (tex && typeof tex.optimize === "function") {
-                try { tex.optimize(); } catch (_) {}
+            tex = hwTextureCache[texPath] || null;
+            if (!tex) {
+                tex = new Image(texPath);
+                if (tex && typeof tex.optimize === "function") {
+                    try { tex.optimize(); } catch (_) {}
+                }
+                if (tex) {
+                    hwTextureCache[texPath] = tex;
+                    hwKeptTextures.push(tex);
+                }
             }
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
         if (!data) return null;
-        if (tex) hwKeptTextures.push(tex);
+        if (dataOut) dataOut.data = data;
         hwKeptRenderData.push(data);
-        // El athena.elf legado se congela si se activa el recorte preciso.
-        // En ese motor usamos el recorte normal; la API nueva sí admite el preciso.
+        // En el motor legado el recorte preciso se limita dinámicamente a las
+        // piezas de pared del borde; activar el mapa completo satura el render.
         try { data.accurate_clipping = !!accurateClip && !hwRenderUsesLegacyFrame; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try {
@@ -1180,6 +1207,81 @@ function updateHw3dProjection() {
         Render.setView(isWide ? 60.0 : 54.0, 0.25, 52.0);
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error Render.setView";
+    }
+}
+
+function updateHwWallChunkStates(camX, camZ, dirX, dirZ, screenW, screenH) {
+    if (hwWallChunks.length === 0) return;
+    const fov = GAME_SETTINGS.aspect16x9 ? 60.0 : 54.0;
+    const aspect = Math.max(1.0, screenW / screenH);
+    const halfV = fov * Math.PI / 360.0;
+    const halfH = Math.atan(Math.tan(halfV) * aspect);
+    // Banda de guarda e histéresis para que el recorte no cambie justo en el pixel del borde.
+    const visibleBand = 0.055;
+    const nearLimit = 0.25;
+    const farLimit = 52.0;
+
+    for (let i = 0; i < hwWallChunks.length; i++) {
+        const chunk = hwWallChunks[i];
+        const clipBand = chunk.accurateClip ? 0.055 : 0.035;
+        const minX = chunk.chunkX * HW_MAP_CHUNK_CELLS * WORLD_CELL_SIZE;
+        const minZ = chunk.chunkZ * HW_MAP_CHUNK_CELLS * WORLD_CELL_SIZE;
+        const maxX = Math.min((chunk.chunkX + 1) * HW_MAP_CHUNK_CELLS, HW_MAP_SIZE_CELLS) * WORLD_CELL_SIZE;
+        const maxZ = Math.min((chunk.chunkZ + 1) * HW_MAP_CHUNK_CELLS, HW_MAP_SIZE_CELLS) * WORLD_CELL_SIZE;
+        let minForward = 1e9;
+        let maxForward = -1e9;
+        let minSideAngle = 1e9;
+        let maxSideAngle = -1e9;
+        let minVerticalAngle = 1e9;
+        let maxVerticalAngle = -1e9;
+        let minDistance = 1e9;
+
+        for (let ix = 0; ix < 2; ix++) {
+            for (let iz = 0; iz < 2; iz++) {
+                const wx = ix ? maxX : minX;
+                const wz = iz ? maxZ : minZ;
+                const dx = wx - camX;
+                const dz = wz - camZ;
+                const forward = dx * dirX + dz * dirZ;
+                const side = dx * -dirZ + dz * dirX;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+                if (forward < minForward) minForward = forward;
+                if (forward > maxForward) maxForward = forward;
+                if (distance < minDistance) minDistance = distance;
+                if (forward > nearLimit) {
+                    const angle = Math.atan2(side, forward);
+                    if (angle < minSideAngle) minSideAngle = angle;
+                    if (angle > maxSideAngle) maxSideAngle = angle;
+                }
+                if (distance > 0.001) {
+                    const lower = Math.atan2(-WORLD_EYE_H, distance);
+                    const upper = Math.atan2(2.6 - WORLD_EYE_H, distance);
+                    if (lower < minVerticalAngle) minVerticalAngle = lower;
+                    if (upper > maxVerticalAngle) maxVerticalAngle = upper;
+                }
+            }
+        }
+
+        let visible = minDistance <= farLimit && maxForward > 0.0;
+        let edgeClip = minForward <= nearLimit && maxForward >= -nearLimit;
+        if (maxSideAngle < minSideAngle) {
+            visible = visible && edgeClip;
+        } else {
+            visible = visible && minSideAngle <= halfH + visibleBand && maxSideAngle >= -halfH - visibleBand;
+            edgeClip = edgeClip ||
+                (minSideAngle < -halfH + clipBand && maxSideAngle > -halfH - clipBand) ||
+                (minSideAngle < halfH + clipBand && maxSideAngle > halfH - clipBand);
+        }
+        edgeClip = edgeClip ||
+            (minVerticalAngle < -halfV + clipBand && maxVerticalAngle > -halfV - clipBand) ||
+            (minVerticalAngle < halfV + clipBand && maxVerticalAngle > halfV - clipBand);
+        edgeClip = visible && edgeClip;
+
+        if (chunk.visible !== visible) chunk.visible = visible;
+        if (hwRenderUsesLegacyFrame && chunk.accurateClip !== edgeClip) {
+            chunk.accurateClip = edgeClip;
+            try { chunk.data.accurate_clipping = edgeClip; } catch (_) {}
+        }
     }
 }
 
@@ -1283,6 +1385,7 @@ function tickProgressive3DStream() {
     }
 
     const step = HW3D_STREAM_STEPS[hwStreamStep];
+    if (step && step.kind === "wall_chunk") hwStreamCooldown = 3;
     try {
         if (step.kind === "init") {
             hw3dAttempted = true;
@@ -1352,15 +1455,27 @@ function tickProgressive3DStream() {
                 } catch (_) {}
             }
             hwStaticObjs = [];
+            hwWallChunks = [];
         } else if (step.kind === "static") {
             const o = loadHwMesh(step.obj, step.tex, !!step.clip);
             if (o) hwStaticObjs.push(o);
-            if (hwStaticObjs.length >= 4 && hwStalkerObj) {
+            if (hwStaticObjs.length >= 6 && hwStalkerObj) {
                 hw3dReady = true;
             }
+        } else if (step.kind === "wall_chunk") {
+            const dataOut = {};
+            const o = loadHwMesh(step.obj, step.tex, !!step.clip, dataOut);
+            if (o && dataOut.data) {
+                hwWallChunks.push({
+                    obj: o, data: dataOut.data,
+                    chunkX: step.chunkX, chunkZ: step.chunkZ,
+                    visible: true, accurateClip: !hwRenderUsesLegacyFrame
+                });
+            }
+            if (hwWallChunks.length > 0 && hwStalkerObj) hw3dReady = true;
         } else if (step.kind === "stalker") {
             hwStalkerObj = loadHwStalker(step.obj, step.tex);
-            if (hwStaticObjs.length >= 4 && hwStalkerObj) hw3dReady = true;
+            if ((hwStaticObjs.length >= 6 || (hwStaticObjs.length >= 3 && hwWallChunks.length > 0)) && hwStalkerObj) hw3dReady = true;
         } else if (step.kind === "gates") {
             hwGatesObj = loadHwMesh(step.obj, step.tex, true);
         } else if (step.kind === "prop") {
@@ -1377,7 +1492,7 @@ function tickProgressive3DStream() {
     hwStreamStep++;
     if (hwStreamStep >= total) {
         hwStreamDone = true;
-        if (hwStaticObjs.length > 0) hw3dReady = true;
+        if (hwStaticObjs.length >= 3 && (hwWallChunks.length > 0 || hwStaticObjs.length >= 6)) hw3dReady = true;
     }
 }
 
@@ -1492,7 +1607,8 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.74);
     fnt.color = rgba(255, 232, 160, 128);
-    fnt.print(barX, barY + 38, MAP_PCT_LABELS[clampedStep] || "0%   (0/13)");
+    const loadPct = total > 0 ? ((clampedStep * 100) / total) | 0 : 100;
+    fnt.print(barX, barY + 38, loadPct + "%   (" + clampedStep + "/" + total + ")");
 
     const spinIdx = ((frameTick >> 2) & 3);
     fnt.scale = Math.fround(0.74);
@@ -1565,6 +1681,7 @@ function renderHardware3DWorld(
         Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
         Camera.position(camX, WORLD_EYE_H, camZ);
         Camera.update();
+        updateHwWallChunkStates(camX, camZ, dirX, dirZ, screenW, screenH);
 
         // Actualizar luz principal solo cuando cambia la linterna (cero spam a C por cuadro)
         const flashStateBit = flashActive ? 1 : 0;
@@ -1579,6 +1696,10 @@ function renderHardware3DWorld(
         // 1. Escenario estatico 3D
         for (let i = 0; i < hwStaticObjs.length; i++) {
             drawHwObject(hwStaticObjs[i], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        }
+        for (let i = 0; i < hwWallChunks.length; i++) {
+            const chunk = hwWallChunks[i];
+            if (chunk.visible) drawHwObject(chunk.obj, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         }
         // 2. Rejas 3D
         if (hwGatesObj && !breakerActive) {
@@ -2777,7 +2898,7 @@ function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
     fnt.color = COL_WHITE;
     fnt.print(px + 22, py + 82,  "Estudio:   HK Entertainment");
     fnt.print(px + 22, py + 112, "Autor:     Joaquin Gasperetti");
-    fnt.print(px + 22, py + 142, "Motor:     AthenaEnv V4 (VU1 + GS)");
+    fnt.print(px + 22, py + 142, "Motor:     HK Engine 1");
 
     Draw.rect(px + 20, py + 176, panelW - 40, 2, rgba(70, 50, 55, 110));
 
@@ -3785,7 +3906,8 @@ Screen.display(() => {
                 Draw.rect(SCREEN_W - sx - 280, topY + 40, 276, 26, rgba(12, 16, 26, 118));
                 fnt.scale = Math.fround(0.62);
                 fnt.color = rgba(110, 230, 255, 128);
-                fnt.print(SCREEN_W - sx - 272, topY + 44, (STREAM_3D_BADGES[hwStreamStep] || "3D...") + (pendStep ? " " + pendStep.label : ""));
+                const streamBadge = hwStreamStep >= HW3D_STREAM_STEPS.length ? "3D VU1 LISTO" : ("3D: " + hwStreamStep + "/" + HW3D_STREAM_STEPS.length);
+                fnt.print(SCREEN_W - sx - 272, topY + 44, streamBadge + (pendStep ? " " + pendStep.label : ""));
             }
             if (hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
                 Draw.rect(SCREEN_W - sx - 210, topY + 40, 206, 24, rgba(8, 14, 22, 118));

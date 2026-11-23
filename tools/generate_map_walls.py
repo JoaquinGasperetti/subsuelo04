@@ -1,8 +1,8 @@
 """Regenerate the 3D wall surfaces from BASE_MAP in main.js.
 
-Only faces bordering walkable cells are emitted. This avoids coplanar internal
-faces between adjacent wall cells, which can flicker on the PS2 GS, and keeps the
-3D wall layout tied to the map used by the PDA and collision code.
+Only faces bordering walkable cells are emitted. Runs are split into spatial
+chunks so the legacy PS2 renderer can accurately clip only the few chunks near
+the screen boundary without processing the whole map every frame.
 """
 
 import ast
@@ -13,13 +13,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MAP_SOURCE = ROOT / "main.js"
-OUTPUTS = {
-    1: ROOT / "assets/models/map_walls_concrete.obj",
-    2: ROOT / "assets/models/map_walls_rust.obj",
-    3: ROOT / "assets/models/map_walls_ritual.obj",
+MATERIALS = {
+    1: "concrete",
+    2: "rust",
+    3: "ritual",
 }
 CELL_SIZE = 2.0
 WALL_HEIGHT = 2.6
+CHUNK_CELLS = 4
 
 
 def read_base_map():
@@ -41,7 +42,7 @@ def exposed_runs(grid):
 
     for gy, row in enumerate(grid):
         for gx, wall_type in enumerate(row):
-            if wall_type not in OUTPUTS:
+            if wall_type not in MATERIALS:
                 continue
             # direction, neighbour cell, plane index, segment index
             sides = (
@@ -87,8 +88,28 @@ def quad_vertices(direction, plane, start, end):
     return [(a, 0, p), (b, 0, p), (b, h, p), (a, h, p)], (0, 0, 1)
 
 
-def write_obj(path, wall_type, runs):
-    quads = runs.get(wall_type, [])
+def split_into_chunks(runs, width, height):
+    """Split merged wall runs into small, spatially bounded mesh chunks."""
+    chunks = defaultdict(list)
+    for wall_type, wall_runs in runs.items():
+        for direction, plane, start, end in wall_runs:
+            segment = start
+            while segment < end:
+                along_chunk = segment // CHUNK_CELLS
+                chunk_end = min(end, (along_chunk + 1) * CHUNK_CELLS)
+                if direction in ("west", "east"):
+                    cx = min(plane, width - 1) // CHUNK_CELLS
+                    cz = along_chunk
+                else:
+                    cx = along_chunk
+                    cz = min(plane, height - 1) // CHUNK_CELLS
+                chunks[(wall_type, cx, cz)].append((direction, plane, segment, chunk_end))
+                segment = chunk_end
+    return chunks
+
+
+def write_obj(path, wall_type, chunk_runs):
+    quads = chunk_runs
     lines = [
         f"# Generated from main.js BASE_MAP; wall type {wall_type}; do not edit by hand."
     ]
@@ -111,9 +132,15 @@ def write_obj(path, wall_type, runs):
 def main():
     grid = read_base_map()
     runs = exposed_runs(grid)
-    for wall_type, path in OUTPUTS.items():
-        write_obj(path, wall_type, runs)
-        print(f"{path.relative_to(ROOT)}: {len(runs.get(wall_type, []))} quads")
+    chunks = split_into_chunks(runs, len(grid[0]), len(grid))
+    models_dir = ROOT / "assets/models"
+    for stale_path in models_dir.glob("map_walls_*_c*_*.obj"):
+        stale_path.unlink()
+    for (wall_type, cx, cz), chunk_runs in sorted(chunks.items()):
+        name = MATERIALS[wall_type]
+        path = ROOT / f"assets/models/map_walls_{name}_c{cx}_{cz}.obj"
+        write_obj(path, wall_type, chunk_runs)
+        print(f"{path.relative_to(ROOT)}: {len(chunk_runs)} quads")
 
 
 if __name__ == "__main__":
