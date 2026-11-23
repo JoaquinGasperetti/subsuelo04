@@ -11,7 +11,7 @@
 
 // Ajustes modificables desde el menú de Opciones (y persistibles en Memory Card)
 const GAME_SETTINGS = {
-    // Motor grafico: 0 = 3D VU1 (STREAM progresivo), 1 = 2.5D EQUILIBRADA (96), 2 = 2.5D RAPIDA (64)
+    // Motor: 0 = 3D VU1 en API nueva (2.5D compatible en ELF legado), 1 = 2.5D media, 2 = 2.5D rápida
     qualityIndex: 0,
     // Margen de seguridad para televisores CRT con overscan (true = seguro CRT, false = pantalla completa HD/emulador)
     crtSafe: true,
@@ -1063,6 +1063,7 @@ const LOAD_SPINNERS = ["|", "/", "-", "\\"];
 let hwStreamStep = 0;
 let hwRenderInitDone = false;
 let hwRenderUsesLegacyFrame = false;
+let hwLegacy2dFallback = false;
 let hwStreamCooldown = 4;
 let hwStreamDone = false;
 let hwStreamFailed = false;
@@ -1085,7 +1086,7 @@ const HW3D_STREAM_STEPS = [
     { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEMS: NOTAS" }
 ];
 
-const HW_MAP_CHUNK_CELLS = 4;
+const HW_MAP_CHUNK_CELLS = 8;
 const HW_MAP_SIZE_CELLS = 20;
 const HW_WALL_MATERIALS = [
     { name: "concrete", tex: "assets/textures/wall_concrete.png", label: "HORMIGON" },
@@ -1399,12 +1400,17 @@ function tickProgressive3DStream() {
                 return;
             }
             hwRenderUsesLegacyFrame = (typeof Render.begin !== "function");
-            if (hwRenderUsesLegacyFrame && typeof Render.PL_NO_LIGHTS === "undefined") {
-                hwLoadErrorMsg = "AthenaEnv sin perfil VU1 compatible";
-                hwStreamFailed = true;
+            if (hwRenderUsesLegacyFrame) {
+                // El renderer legado filtra memoria al recortar mallas en pantalla.
+                // Usar el raycaster por columnas evita artifacts y conserva el nivel jugable.
+                hwLegacy2dFallback = true;
+                hwLoadErrorMsg = "MOTOR LEGADO: 2.5D ESTABLE";
+                hwStreamStep = HW3D_STREAM_STEPS.length;
+                hwStreamDone = true;
                 hw3dReady = false;
                 return;
             }
+            hwLegacy2dFallback = false;
             if (!screenDepthBufferReady) {
                 hwLoadErrorMsg = "Z-buffer no disponible";
                 hwStreamFailed = true;
@@ -1588,7 +1594,7 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.72);
     fnt.color = rgba(205, 210, 224, 128);
-    fnt.print(px + 24, py + 54, "CARGANDO MAPA 3D Y ACECHADOR");
+    fnt.print(px + 24, py + 54, hwLegacy2dFallback ? "PREPARANDO MOTOR 2.5D ESTABLE" : "CARGANDO MAPA 3D Y ACECHADOR");
 
     const total = HW3D_STREAM_STEPS.length;
     const clampedStep = hwStreamStep < 0 ? 0 : (hwStreamStep > total ? total : hwStreamStep);
@@ -1627,7 +1633,7 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
     const curStep = HW3D_STREAM_STEPS[clampedStep < total ? clampedStep : (total - 1)];
     fnt.scale = Math.fround(0.72);
     fnt.color = rgba(238, 240, 248, 128);
-    fnt.print(barX, barY + 88, curStep ? curStep.label : "ENTRANDO AL MAPA...");
+    fnt.print(barX, barY + 88, hwLegacy2dFallback ? "MOTOR 2.5D COMPATIBLE LISTO" : (curStep ? curStep.label : "ENTRANDO AL MAPA..."));
 
     fnt.scale = Math.fround(0.70);
     fnt.color = rgba(185, 195, 212, 128);
@@ -2739,8 +2745,9 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
     const volIdx = ((GAME_SETTINGS.audioVolume / 25) | 0);
     const volLabel = (volIdx >= 0 && volIdx < VOL_LABELS.length) ? VOL_LABELS[volIdx] : "0%";
     const audioVal = (GAME_SETTINGS.audioVolume === 0) ? "APAGADO" : (isAudioReady() ? volLabel : "SIN AUDIO");
+    const qualityLabel = (hwLegacy2dFallback && GAME_SETTINGS.qualityIndex === 0) ? "2.5D COMPAT" : QUALITY_LABELS[GAME_SETTINGS.qualityIndex];
     const rows = [
-        { label: "MOTOR GRAFICO",  val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
+        { label: "MOTOR GRAFICO",  val: qualityLabel },
         { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
         { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
         { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },

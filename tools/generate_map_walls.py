@@ -1,8 +1,8 @@
 """Regenerate the 3D wall surfaces from BASE_MAP in main.js.
 
 Only faces bordering walkable cells are emitted. Runs are split into spatial
-chunks so the legacy PS2 renderer can accurately clip only the few chunks near
-the screen boundary without processing the whole map every frame.
+chunks to keep each mesh bounded for the newer PS2 renderer. The legacy ELF
+uses the 2.5D raycaster instead of its unstable native mesh clipping path.
 """
 
 import ast
@@ -20,7 +20,7 @@ MATERIALS = {
 }
 CELL_SIZE = 2.0
 WALL_HEIGHT = 2.6
-CHUNK_CELLS = 4
+CHUNK_CELLS = 8
 
 
 def read_base_map():
