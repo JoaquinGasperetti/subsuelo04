@@ -79,7 +79,8 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
   - `src/map.js`: grilla lógica `BASE_MAP` (`20×20`), colisión AABB por ejes con sub-stepping (`movePlayerAxis`) y notas de lore.
   - `src/ai.js`: máquina de estados del enemigo (`AI_PATROL`, `AI_INVESTIGATE`, `AI_CHASE_INTRO`, `AI_HUNT`) y pathfinding BFS sin asignaciones.
   - `src/renderer.js`: pipeline 3D por hardware (VU1 + GS), streaming progresivo en 13 pasos (`HW3D_STREAM_STEPS`), fallback 2.5D por software, viewmodel y PDA.
-  - `src/menus.js` y `main.js`: máquina de estados global (`STATE_SPLASH` → `STATE_LOADING` → `STATE_TITLE` → `STATE_MAP_LOADING` → `STATE_PLAY` / `STATE_PAUSE` / `STATE_OPTIONS` / etc.) y bucle `Screen.display()`.
+  - `src/cinematic.js`: sistema de cinemáticas declarativo sin asignaciones por cuadro (keyframes de cámara, fundidos, subtítulos máquina de escribir, efectos VHS, entidades y cues de audio) + intro *found footage* de 44 s (`CINEMATIC_INTRO`).
+  - `src/menus.js` y `main.js`: máquina de estados global (`STATE_SPLASH` → `STATE_LOADING` → `STATE_TITLE` → `STATE_MAP_LOADING` → `STATE_CINEMATIC` → `STATE_PLAY` / `STATE_PAUSE` / `STATE_OPTIONS` / etc.) y bucle `Screen.display()`.
 - **Configuración de arranque (`athena.ini`)**: debe mantenerse con saltos de línea **CRLF** (`boot_logo = false`, `dark_mode = true`, `default_script = "main.js"`). El logo nativo de AthenaEnv se desactiva para mostrar el splash propio de **HK Entertainment** (`STATE_SPLASH`), cuya textura se libera de VRAM antes de iniciar la partida.
 
 ## 2. Pipeline de renderizado
@@ -241,6 +242,17 @@ Presionando **R2** durante la partida (o activando *FPS / Diagnóstico* en Opcio
 4. **Activar `accurate_clipping = true`** únicamente en mallas grandes atravesables de cerca (paredes, puertas, rejas); dejar `false` en piso, techo, props y personajes.
 5. **Respetar el orden de cámara** (`Camera.target` antes de `Camera.position`) y alternar `DEPTH_TEST_ENABLE` (`true` + `DEPTH_GEQUAL` en 3D, `false` en 2D/HUD).
 6. **Auditar el presupuesto en consola real con `R2`**: verificar que `GS VRAM` no se acerque a 4.096 KB, mantener `TRI` bajo ~1.800–2.500 y evitar asignaciones por cuadro en QuickJS.
+
+---
+
+## Próximos pasos
+
+- [x] Sistema de cinemáticas declarativo (`src/cinematic.js` embebido en `main.js`) con cámara interpolada, efectos VHS, subtítulos máquina de escribir, aparición de El Acechador y salto manteniendo `START`.
+- [x] Cinemática introductoria *found footage* de 44 segundos al iniciar Nueva Partida (`STATE_MAP_LOADING` → `STATE_CINEMATIC` → `STATE_PLAY`).
+- [ ] Grabar y convertir a PS2 SPU2 ADPCM (`.adp`) los efectos cortos de cinemática y gameplay (`vhs_static.adp`, `stalker_growl.adp`, `gate_locked.adp`, `flashlight.adp`, `heartbeat.adp`) y habilitar su precarga opcional.
+- [ ] Agregar cinemática de evacuación (apertura de compuerta Norte al reunir los 4 fusibles) reutilizando `startCinematic(...)`.
+- [ ] Validar en hardware PS2 real (OPL USB 1.1 y DVD-R) los 44 segundos completos de la intro en modo 3D VU1 y 2.5D con telemetría `R2` (FPS, EE RAM y GS VRAM).
+- [ ] Añadir opción en Menú de Opciones para omitir automáticamente la intro en partidas siguientes o verla desde Expediente.
 
 ---
 
