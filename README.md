@@ -61,8 +61,8 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 
 ## Novedades de esta corrección
 - **Compatibilidad del pase VU1**: Se solicita Z16S y se comprueba que AthenaEnv lo haya activado. El `athena.elf` incluido expone la API antigua: `Render.setView()` inicializa el motor y los objetos se dibujan con `RenderObject.draw(...)`. El juego también admite la API nueva (`Render.init()`, `Render.begin()` y `render()`) cuando está disponible. En la ruta antigua usa el perfil VU1 sin iluminación dinámica; el diagnóstico muestra `VU1L` y restaura profundidad para el HUD.
-- **Compatibilidad estable del motor legado**: El `athena.elf` antiguo usa el raycaster 2.5D de 128 rayos, cuyo recorte por columnas no consume memoria nativa al cruzar el borde. La API nueva conserva el render 3D con clipping preciso.
-- **Paredes alineadas con la PDA**: `tools/generate_map_walls.py` regenera las superficies 3D desde `BASE_MAP`, elimina caras internas superpuestas y guarda las paredes por material y sector de 8×8 celdas.
+- **Recorte de geometría del mapa**: La API nueva de AthenaEnv usa `accurate_clipping` para recortar triángulos que atraviesan los planos de cámara. El `athena.elf` legado mantiene el recorte normal porque su implementación del recorte preciso congela el render al dibujar el nivel.
+- **Paredes alineadas con la PDA**: `tools/generate_map_walls.py` regenera las superficies 3D directamente desde `BASE_MAP`, eliminando caras internas superpuestas que causaban parpadeo y corrigiendo la orientación de las caras.
 - **Carga 3D completa**: La carga progresiva incluye piso, techo, paredes, salida, rejas, ítems y `stalker.obj` con `stalker.png`. El modelo se conserva en memoria y se dibuja con la API compatible con el `athena.elf` incluido.
 - **Plano cercano de cámara**: Se ajustó el recorte para que las paredes no desaparezcan al acercarse hasta el margen permitido por la colisión, manteniendo el fondo del mapa dentro del rango visible.
 - **Textos de menús y PDA**: Se usa `assets/fonts/ui.ttf` (FreeType); los rótulos pequeños del PDA ahora se dibujan a escala 0.72 para evitar la reducción que los volvía borrosos en 480i.
