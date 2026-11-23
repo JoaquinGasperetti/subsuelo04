@@ -1111,10 +1111,9 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (!data) return null;
         if (tex) hwKeptTextures.push(tex);
         hwKeptRenderData.push(data);
-        // El recorte preciso mantiene visibles las caras parciales en el borde
-        // del frustum; el recorte rápido del renderer legado las oculta antes
-        // de que salgan completamente de pantalla y puede hacerlas parpadear.
-        try { data.accurate_clipping = !!accurateClip; } catch (_) {}
+        // El athena.elf legado se congela si se activa el recorte preciso.
+        // En ese motor usamos el recorte normal; la API nueva sí admite el preciso.
+        try { data.accurate_clipping = !!accurateClip && !hwRenderUsesLegacyFrame; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try {
             data.pipeline = hwRenderUsesLegacyFrame ? Render.PL_NO_LIGHTS : Render.PL_DEFAULT;
