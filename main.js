@@ -11,7 +11,7 @@
 
 // Ajustes modificables desde el menú de Opciones (y persistibles en Memory Card)
 const GAME_SETTINGS = {
-    // Motor grafico: 0 = 3D VU1 (STREAM progresivo), 1 = 2.5D EQUILIBRADA (96), 2 = 2.5D RAPIDA (64)
+    // Motor grafico: 0 = modelos 3D reales por VU1, 1 = 2.5D media, 2 = 2.5D rapida
     qualityIndex: 0,
     // Margen de seguridad para televisores CRT con overscan (true = seguro CRT, false = pantalla completa HD/emulador)
     crtSafe: true,
@@ -135,8 +135,11 @@ function updateConsoleStats(frameTick) {
             if (typeof Screen.VRAM_USED_TOTAL !== "undefined") consoleStats.vramUsed = Screen.getMemoryStats(Screen.VRAM_USED_TOTAL) | 0;
             if (typeof Screen.VRAM_SIZE !== "undefined") consoleStats.vramTotal = Screen.getMemoryStats(Screen.VRAM_SIZE) | 0;
         } else if (typeof Screen !== "undefined" && typeof Screen.getFreeVRAM === "function") {
-            // Compatibilidad con runtimes antiguos: esta API informa el uso en AthenaEnv.
-            consoleStats.vramUsed = Screen.getFreeVRAM() | 0;
+            // AthenaEnv conserva el nombre getFreeVRAM, pero sin argumento
+            // devuelve VRAM usada (VRAM_USED_TOTAL).
+            const total = 4 * 1024 * 1024;
+            consoleStats.vramTotal = total;
+            consoleStats.vramUsed = Math.max(0, Math.min(total, Screen.getFreeVRAM() | 0));
         }
     } catch (_) {}
 
@@ -1029,16 +1032,18 @@ let hwLastFlashState = -1;
 let hwPlayFrameCount = 0;
 let hwVramLabel = "VRAM:--";
 let hwStalkerObj = null;
-// Referencias globales para evitar que el GC de QuickJS libere Image/RenderData en uso por RenderObject
+// RenderObject conserva RenderData; retener Image evita que QuickJS libere sus texturas.
 const hwKeptTextures = [];
-const hwKeptRenderData = [];
+// position/rotation se copian de forma sincrona; reutilizar evita crear objetos por draw.
+const hwDrawPosition = { x: 0.0, y: 0.0, z: 0.0 };
+const hwDrawRotation = { x: 0.0, y: 0.0, z: 0.0 };
 let hwStalkerIsGltf = false;
 let hwStalkerSource = "NONE";
 
 // ============================================================================
 // ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO (TITULO Y PARTIDA)
-// AthenaEnv antiguo inicializa el VU1 con Render.setView(); las versiones recientes
-// separan esa inicializacion en Render.init() y Render.begin().
+// AthenaEnv moderno inicializa el VU1 con Render.init() y abre cada cuadro 3D
+// con Render.begin(); el modo 3D requiere esta API y el pase RenderObject.render().
 // ============================================================================
 let bootLoadStep = 0;
 let bootLoadPhase = 0;
@@ -1060,7 +1065,6 @@ const LOAD_SPINNERS = ["|", "/", "-", "\\"];
 // Carga progresiva 3D en pantalla de carga dedicada (entre Menu Principal y Partida)
 let hwStreamStep = 0;
 let hwRenderInitDone = false;
-let hwRenderUsesLegacyFrame = false;
 let hwStreamCooldown = 4;
 let hwStreamDone = false;
 let hwStreamFailed = false;
@@ -1109,24 +1113,21 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
         if (!data) return null;
-        if (tex) hwKeptTextures.push(tex);
-        hwKeptRenderData.push(data);
         // El recorte preciso se ejecuta en el VU1 antes de enviar triángulos fuera
         // del volumen visible al GS. Reservarlo para paredes/rejas/salida mantiene
         // piso, techo y modelos pequeños en el camino rápido, sin crear meshes nuevos.
         try { data.accurate_clipping = !!accurateClip; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try {
-            data.pipeline = hwRenderUsesLegacyFrame ? Render.PL_NO_LIGHTS : Render.PL_DEFAULT;
+            data.pipeline = Render.PL_DEFAULT;
         } catch (_) {}
         const obj = new RenderObject(data);
         if (obj) {
-            if (hwRenderUsesLegacyFrame && typeof obj.setPipeline === "function") {
-                try { obj.setPipeline(Render.PL_NO_LIGHTS); } catch (_) {}
-            } else {
-                obj.position = { x: 0.0, y: 0.0, z: 0.0 };
-                obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
-            }
+            // Retener la textura solo después de crear el objeto: si falla la
+            // carga, no dejamos imágenes/meshes huérfanos vivos hasta el final.
+            if (tex) hwKeptTextures.push(tex);
+            obj.position = { x: 0.0, y: 0.0, z: 0.0 };
+            obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
         }
         return obj;
     } catch (e) {
@@ -1137,23 +1138,19 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
 
 function drawHwObject(obj, x, y, z, rx, ry, rz) {
     if (!obj) return;
-    // La API antigua de AthenaEnv expone RenderObject.draw(...); la nueva usa
-    // position/rotation + render(). Priorizar el método disponible en cada ELF.
-    if (hwRenderUsesLegacyFrame && typeof obj.draw === "function") {
-        obj.draw(x, y, z, rx, ry, rz);
-        return;
-    }
     if (typeof obj.render === "function") {
-        obj.position = { x: x, y: y, z: z };
-        obj.rotation = { x: rx, y: ry, z: rz };
+        hwDrawPosition.x = x;
+        hwDrawPosition.y = y;
+        hwDrawPosition.z = z;
+        hwDrawRotation.x = rx;
+        hwDrawRotation.y = ry;
+        hwDrawRotation.z = rz;
+        obj.position = hwDrawPosition;
+        obj.rotation = hwDrawRotation;
         obj.render();
         return;
     }
-    if (typeof obj.draw === "function") {
-        obj.draw(x, y, z, rx, ry, rz);
-        return;
-    }
-    throw new Error("RenderObject sin draw/render");
+    throw new Error("RenderObject sin render() de VU1");
 }
 
 function loadHwStalker(objPath, texPath) {
@@ -1287,18 +1284,13 @@ function tickProgressive3DStream() {
     try {
         if (step.kind === "init") {
             hw3dAttempted = true;
-            if (typeof Render === "undefined" || typeof Render.setView !== "function" ||
+            if (typeof Render === "undefined" || typeof Render.init !== "function" ||
+                typeof Render.begin !== "function" || typeof Render.setView !== "function" ||
                 typeof RenderData !== "function" || typeof RenderObject !== "function" ||
+                !RenderObject.prototype || typeof RenderObject.prototype.render !== "function" ||
                 typeof Camera === "undefined" ||
                 typeof Image !== "function" || !fileExistsSafe("assets/models/map_floor.obj")) {
-                hwLoadErrorMsg = "API 3D o mapa ausente";
-                hwStreamFailed = true;
-                hw3dReady = false;
-                return;
-            }
-            hwRenderUsesLegacyFrame = (typeof Render.begin !== "function");
-            if (hwRenderUsesLegacyFrame && typeof Render.PL_NO_LIGHTS === "undefined") {
-                hwLoadErrorMsg = "AthenaEnv sin perfil VU1 compatible";
+                hwLoadErrorMsg = "AthenaEnv sin API VU1 moderna";
                 hwStreamFailed = true;
                 hw3dReady = false;
                 return;
@@ -1310,9 +1302,8 @@ function tickProgressive3DStream() {
                 return;
             }
             try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
-            if (!hwRenderInitDone && typeof Render.init === "function") {
-                // La API actual separa la carga del renderer de la proyeccion.
-                // En la API incluida con athena.elf, setView() hace ambas cosas.
+            if (!hwRenderInitDone) {
+                // La API moderna separa la inicialización de la proyección.
                 Render.init();
                 hwRenderInitDone = true;
             }
@@ -1323,14 +1314,13 @@ function tickProgressive3DStream() {
                 hw3dReady = false;
                 return;
             }
-            if (typeof Render.init !== "function") hwRenderInitDone = true; // Render.setView inicializo el renderer legado.
             if (typeof Camera.type === "function" && typeof Camera.LOOKAT !== "undefined") {
                 Camera.type(Camera.LOOKAT);
             }
 
             hwLightMain = -1;
             hwLightFill = -1;
-            if (!hwRenderUsesLegacyFrame && typeof Lights !== "undefined") {
+            if (typeof Lights !== "undefined") {
                 let l0 = 0;
                 let l1 = 1;
                 try {
@@ -1512,11 +1502,11 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
     const curStep = HW3D_STREAM_STEPS[clampedStep < total ? clampedStep : (total - 1)];
     fnt.scale = Math.fround(0.72);
     fnt.color = rgba(238, 240, 248, 128);
-    fnt.print(barX, barY + 88, curStep ? curStep.label : "ENTRANDO AL MAPA...");
+    fnt.print(barX, barY + 88, hwStreamFailed ? hwLoadErrorMsg : (curStep ? curStep.label : "ENTRANDO AL MAPA..."));
 
     fnt.scale = Math.fround(0.70);
     fnt.color = rgba(185, 195, 212, 128);
-    fnt.print(barX, py + panelH - 34, "[CIRCULO] JUGAR EN 2.5D");
+    fnt.print(barX, py + panelH - 34, hwStreamFailed ? "[CIRCULO] CONTINUAR (2.5D)" : "[CIRCULO] JUGAR EN 3D VU1");
 }
 
 function renderHardware3DWorld(
@@ -1560,7 +1550,7 @@ function renderHardware3DWorld(
         } catch (_) {}
     }
     try {
-        if (!hwRenderUsesLegacyFrame) Render.begin();
+        Render.begin();
         // Camera.target conserva el desplazamiento del objetivo anterior y mueve
         // la posición de cámara. Por eso se fija la posición al final en cada frame.
         Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
@@ -2646,8 +2636,11 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
     const volIdx = ((GAME_SETTINGS.audioVolume / 25) | 0);
     const volLabel = (volIdx >= 0 && volIdx < VOL_LABELS.length) ? VOL_LABELS[volIdx] : "0%";
     const audioVal = (GAME_SETTINGS.audioVolume === 0) ? "APAGADO" : (isAudioReady() ? volLabel : "SIN AUDIO");
+    const qualityLabel = (GAME_SETTINGS.qualityIndex === 0 && hwStreamFailed)
+        ? "ERROR VU1"
+        : QUALITY_LABELS[GAME_SETTINGS.qualityIndex];
     const rows = [
-        { label: "MOTOR GRAFICO",  val: QUALITY_LABELS[GAME_SETTINGS.qualityIndex] },
+        { label: "MOTOR GRAFICO",  val: qualityLabel },
         { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
         { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
         { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
@@ -3561,9 +3554,17 @@ Screen.display(() => {
             if ((hwPlayFrameCount % 30) === 1) {
                 let freeKb = -1;
                 try {
-                    if (typeof Screen.getFreeVRAM === "function") freeKb = (Screen.getFreeVRAM() / 1024) | 0;
+                    if (typeof Screen.getMemoryStats === "function" &&
+                        typeof Screen.VRAM_USED_TOTAL !== "undefined" && typeof Screen.VRAM_SIZE !== "undefined") {
+                        const used = Screen.getMemoryStats(Screen.VRAM_USED_TOTAL) | 0;
+                        const total = Screen.getMemoryStats(Screen.VRAM_SIZE) | 0;
+                        freeKb = Math.max(0, ((total - used) / 1024) | 0);
+                    } else if (typeof Screen.getFreeVRAM === "function") {
+                        const used = Screen.getFreeVRAM() | 0;
+                        freeKb = Math.max(0, ((4 * 1024 * 1024 - used) / 1024) | 0);
+                    }
                 } catch (_) {}
-                hwVramLabel = ["F:", String(hwPlayFrameCount), " VRAM:", String(freeKb), "KB"].join("");
+                hwVramLabel = ["F:", String(hwPlayFrameCount), " VRAM L:", String(freeKb), "KB"].join("");
             }
             tickProgressive3DStream();
 
@@ -3875,7 +3876,7 @@ Screen.display(() => {
                     fnt.scale = Math.fround(0.58);
                     fnt.color = rgba(120, 255, 120, 128);
                     fnt.print(sx + 6, topY + 43, "X:" + player.x.toFixed(1) + " Y:" + player.y.toFixed(1) +
-                        " 3D:" + (hw3dReady ? (hwRenderUsesLegacyFrame ? "VU1L" : "VU1") : "2.5D") +
+                        " 3D:" + (GAME_SETTINGS.qualityIndex === 0 ? (hw3dReady ? "VU1" : (hwStreamFailed ? "ERROR" : "CARGA")) : "2.5D") +
                         " EN:" + hwStalkerSource + " FPS:" + fps);
                 } else {
                     Draw.rect(sx + hudW - 76, topY + 33, 76, 18, rgba(0, 0, 0, 100));
@@ -3885,7 +3886,7 @@ Screen.display(() => {
                 }
             }
 
-            if (GAME_SETTINGS.showFps) {
+            if (GAME_SETTINGS.showFps || debugMode > 0) {
                 drawConsoleStatsOverlay(SCREEN_W, SCREEN_H, frameTick, fnt);
             }
 

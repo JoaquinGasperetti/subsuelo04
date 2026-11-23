@@ -1,12 +1,12 @@
 # Subsuelo 04: El Acechador (PS2 Real Hardware Edition)
 
-Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desarrollado en **JavaScript** sobre [AthenaEnv V4](https://github.com/DanielSant0s/AthenaEnv). Probado y optimizado para ejecutarse en una **PlayStation 2 real chipeada (Matrix + OPL)** y en **PCSX2**.
+Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desarrollado en **JavaScript** sobre [AthenaEnv](https://github.com/DanielSant0s/AthenaEnv). Probado y optimizado para ejecutarse en una **PlayStation 2 real chipeada (Matrix + OPL)** y en **PCSX2**.
 
 ## Estructura del repositorio
 
 ```text
 .
-├── athena.elf       # Runtime AthenaEnv V4 para PlayStation 2
+├── athena.elf       # Runtime AthenaEnv clean-api con render VU1 y allocator GS VRAM corregido
 ├── athena.ini       # Configuración de arranque de AthenaEnv (CRLF)
 ├── main.js          # Juego completo en un solo archivo (sin imports ES6)
 ├── title.cfg        # Lanzador para la pestaña APPS de OPL
@@ -60,10 +60,11 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 - Activá **HostFS** en ajustes avanzados y cargá `athena.elf` desde **Sistema -> Iniciar archivo...**.
 
 ## Novedades de esta corrección
-- **Compatibilidad del pase VU1**: Se solicita Z16S y se comprueba que AthenaEnv lo haya activado. El `athena.elf` incluido expone la API antigua: `Render.setView()` inicializa el motor y los objetos se dibujan con `RenderObject.draw(...)`. El juego también admite la API nueva (`Render.init()`, `Render.begin()` y `render()`) cuando está disponible. En la ruta antigua usa el perfil VU1 sin iluminación dinámica; el diagnóstico muestra `VU1L` y restaura profundidad para el HUD.
-- **Recorte de geometría en el borde**: `accurate_clipping` queda activado solo en las paredes, rejas y salida; piso, techo, enemigo e ítems usan el camino rápido. Athena hace ese recorte en el VU1 con buffers temporales fijos, antes de enviar los vértices al GS. El mapa sigue usando sus meshes completos, sin fragmentarlos ni crear objetos por cuadro.
+- **Pase VU1 en PS2 real**: `athena.elf` usa el build de AthenaEnv `clean-api` (commit `ad1949e`, [CI](https://github.com/DanielSant0s/AthenaEnv/actions/runs/44427724969)), con `Render.init()`, `Render.begin()` y `RenderObject.render()`. Incluye la [corrección del allocator GS VRAM](https://github.com/DanielSant0s/AthenaEnv/commit/6527a7375e4a10c254279bc938859a0a75af4214), que mantenía mal ordenados los bloques libres al alinear una textura y podía asignar rangos todavía ocupados. El modo predeterminado exige la API VU1 moderna y dibuja los OBJ reales.
+- **Recorte de geometría**: `accurate_clipping` se reserva para paredes, rejas y salida; piso, techo, enemigo e ítems usan el camino rápido.
 - **Paredes alineadas con la PDA**: `tools/generate_map_walls.py` regenera las superficies 3D directamente desde `BASE_MAP`, eliminando caras internas superpuestas que causaban parpadeo y corrigiendo la orientación de las caras.
-- **Carga 3D completa**: La carga progresiva incluye piso, techo, paredes, salida, rejas, ítems y `stalker.obj` con `stalker.png`. El modelo se conserva en memoria y se dibuja con la API compatible con el `athena.elf` incluido.
+- **Carga 3D completa**: La carga progresiva incluye piso, techo, paredes, salida, rejas, ítems y `stalker.obj` con `stalker.png`. Los objetos reutilizan sus `RenderData` y texturas durante toda la partida.
+- **Diagnóstico de memoria**: El overlay R2 informa EE RAM y GS VRAM usada. Aunque se llama `getFreeVRAM`, la API de AthenaEnv devuelve VRAM usada cuando se consulta sin argumentos.
 - **Plano cercano de cámara**: Se ajustó el recorte para que las paredes no desaparezcan al acercarse hasta el margen permitido por la colisión, manteniendo el fondo del mapa dentro del rango visible.
 - **Textos de menús y PDA**: Se usa `assets/fonts/ui.ttf` (FreeType); los rótulos pequeños del PDA ahora se dibujan a escala 0.72 para evitar la reducción que los volvía borrosos en 480i.
 - **Logo HK Entertainment**: Se desactivó el boot logo de AthenaEnv en `athena.ini` (`boot_logo = false`), se agregó la pantalla de arranque con `assets/textures/hk_logo.png` (256x256, liberada de VRAM antes de jugar) y se incluyó el ícono `ART/athena.elf_ICO.png` (64x64 PNG 8-bit) para copiar a `mass:/ART/` si deseás verlo en la lista APPS de OPL.
