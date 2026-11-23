@@ -32,7 +32,9 @@ const GAME_SETTINGS = {
 // Mostrar panel de diagnostico de rendimiento
     showFps: false,
     // Dificultad: 0 = NORMAL, 1 = PESADILLA
-    difficulty: 0
+    difficulty: 0,
+    // Animacion procedural del Acechador en modo 3D VU1
+    stalkerAnim: true
 };
 
 const QUALITY_RAYS = [128, 96, 64];
@@ -231,6 +233,7 @@ function loadSaveData() {
             if (typeof data.difficulty === "number" && (data.difficulty === 0 || data.difficulty === 1)) {
                 GAME_SETTINGS.difficulty = data.difficulty | 0;
             }
+            if (typeof data.stalkerAnim === "boolean") GAME_SETTINGS.stalkerAnim = data.stalkerAnim;
             if (typeof data.bestNormalSec === "number" && data.bestNormalSec > 0) {
                 RECORDS.bestNormalSec = data.bestNormalSec | 0;
             }
@@ -263,6 +266,7 @@ function saveGameData() {
             audioVolume: GAME_SETTINGS.audioVolume,
             showFps: GAME_SETTINGS.showFps,
             difficulty: GAME_SETTINGS.difficulty,
+            stalkerAnim: GAME_SETTINGS.stalkerAnim,
             bestNormalSec: RECORDS.bestNormalSec,
             bestNightmareSec: RECORDS.bestNightmareSec,
             escapes: RECORDS.escapes
@@ -1041,6 +1045,172 @@ let hwStalkerIsGltf = false;
 let hwStalkerSource = "NONE";
 
 // ============================================================================
+// ANIMACION PROCEDURAL DEL ACECHADOR 3D (0 allocs/frame, LUT Float64, NTSC/PAL)
+// ============================================================================
+const STALKER_SIN_SIZE = 256;
+const STALKER_SIN_MASK = 255;
+const STALKER_TWO_PI = toF64(6.283185307179586);
+const STALKER_RAD_TO_LUT = toF64(STALKER_SIN_SIZE / 6.283185307179586);
+const STALKER_SIN_LUT = new Float64Array(STALKER_SIN_SIZE);
+for (let i = 0; i < STALKER_SIN_SIZE; i++) {
+    STALKER_SIN_LUT[i] = toF64(Math.sin((i * 6.283185307179586) / STALKER_SIN_SIZE));
+}
+
+function resetStalkerAnim(inst, x, y) {
+    if (!inst) return;
+    inst.animPhase = toF64(0.0);
+    inst.animSpasmPhase = toF64(0.0);
+    inst.animPrevX = toF64(x);
+    inst.animPrevY = toF64(y);
+    inst.animSpeed = toF64(0.0);
+    inst.animYaw = toF64(0.0);
+    inst.animYawInit = false;
+    inst.animOutY = toF64(0.0);
+    inst.animOutRx = toF64(0.0);
+    inst.animOutRy = toF64(0.0);
+    inst.animOutRz = toF64(0.0);
+}
+
+// Actualiza fase, orientacion suave (arco mas corto) y pose procedural por instancia
+function updateStalkerAnim(inst, lookX, lookY, dtScale, hasLos, isBlinded) {
+    if (!inst) return;
+    const sx = toF64(inst.x);
+    const sy = toF64(inst.y);
+
+    if (!GAME_SETTINGS.stalkerAnim) {
+        inst.animPrevX = sx;
+        inst.animPrevY = sy;
+        inst.animYawInit = false;
+        return;
+    }
+
+    const dt = clampF64(dtScale, 0.5, 2.0);
+    const dx = sx - toF64(inst.animPrevX);
+    const dy = sy - toF64(inst.animPrevY);
+    inst.animPrevX = sx;
+    inst.animPrevY = sy;
+
+    const distSq = fadd(dx * dx, dy * dy);
+    let moveDist = toF64(0.0);
+    let moved = false;
+
+    // Salto > 0.5 celdas en 1 cuadro = spawn o teletransporte (no interpretar como velocidad)
+    if ((distSq - 0.25) > 0) {
+        inst.animSpeed = toF64(0.0);
+        inst.animYawInit = false;
+    } else if ((distSq - 0.00000001) > 0) {
+        moveDist = toF64(Math.sqrt(distSq));
+        moved = true;
+    }
+
+    // Velocidad real normalizada a 60Hz (celdas por cuadro equivalente)
+    const instSpeed = moveDist / dt;
+    const speedAlpha = clampF64(0.22 * dt, 0.0, 1.0);
+    const smoothSpeed = fadd(toF64(inst.animSpeed), (instSpeed - toF64(inst.animSpeed)) * speedAlpha);
+    inst.animSpeed = smoothSpeed;
+
+    // Perfil de movimiento segun estado de IA (default: AI_PATROL lento y pesado)
+    let bobAmp = toF64(0.048);
+    let rollAmp = toF64(0.056);
+    let pitchBase = toF64(0.040);
+    let pitchAmp = toF64(0.020);
+    let freqScale = toF64(8.2);
+    let turnRate = toF64(0.10);
+
+    const st = inst.state;
+    if (st === AI_INVESTIGATE) {
+        bobAmp = toF64(0.032);
+        rollAmp = toF64(0.036);
+        pitchBase = toF64(0.065);
+        pitchAmp = toF64(0.018);
+        freqScale = toF64(9.0);
+        turnRate = toF64(0.13);
+    } else if (st === AI_CHASE_INTRO) {
+        bobAmp = toF64(0.028);
+        rollAmp = toF64(0.042);
+        pitchBase = toF64(0.095);
+        pitchAmp = toF64(0.024);
+        freqScale = toF64(9.6);
+        turnRate = toF64(0.18);
+    } else if (st === AI_HUNT) {
+        bobAmp = toF64(0.075);
+        rollAmp = toF64(0.078);
+        pitchBase = toF64(0.165);
+        pitchAmp = toF64(0.045);
+        freqScale = toF64(11.2);
+        turnRate = toF64(0.22);
+    }
+
+    // Orientacion: gira hacia su movimiento y solo encara al jugador si lo caza o lo ve
+    const facePlayer = (st === AI_HUNT) || (st === AI_CHASE_INTRO) || !!hasLos;
+    let targetYaw = toF64(inst.animYaw);
+    let hasTargetYaw = false;
+    if (facePlayer) {
+        targetYaw = toF64(Math.atan2(toF64(lookX) - sx, toF64(lookY) - sy));
+        hasTargetYaw = true;
+    } else if (moved) {
+        targetYaw = toF64(Math.atan2(dx, dy));
+        hasTargetYaw = true;
+    } else if (!inst.animYawInit) {
+        targetYaw = toF64(Math.atan2(toF64(lookX) - sx, toF64(lookY) - sy));
+        hasTargetYaw = true;
+    }
+
+    if (hasTargetYaw) {
+        if (!inst.animYawInit) {
+            inst.animYaw = targetYaw;
+            inst.animYawInit = true;
+        } else {
+            inst.animYaw = cinLerpAngle(inst.animYaw, targetYaw, clampF64(turnRate * dt, 0.0, 1.0));
+        }
+    }
+
+    let targetY = toF64(0.0);
+    let targetRx = pitchBase;
+    let targetRz = toF64(0.0);
+    let yawJitter = toF64(0.0);
+
+    if (isBlinded) {
+        // Frenado por linterna: espasmos cortos y retroceso leve usando 2 armonicos de la LUT
+        let spPhase = fadd(toF64(inst.animSpasmPhase), 0.62 * dt);
+        if ((spPhase - STALKER_TWO_PI) >= 0) spPhase = spPhase - STALKER_TWO_PI;
+        inst.animSpasmPhase = spPhase;
+
+        const spIdx = ((spPhase * STALKER_RAD_TO_LUT) | 0) & STALKER_SIN_MASK;
+        const sp1 = STALKER_SIN_LUT[spIdx];
+        const sp2 = STALKER_SIN_LUT[((spIdx * 3) + 41) & STALKER_SIN_MASK];
+        const jerk = sp1 * sp2;
+
+        targetY = (sp1 * sp1) * 0.018;
+        targetRx = fadd(-0.070, sp2 * 0.075);
+        targetRz = fadd(sp1 * 0.065, jerk * 0.060);
+        yawJitter = sp2 * 0.070;
+    } else {
+        const moveAmp = clampF64(smoothSpeed / 0.014, 0.0, 1.15);
+        if ((moveAmp - 0.02) > 0) {
+            let phase = fadd(toF64(inst.animPhase), fadd(0.030, smoothSpeed * freqScale) * dt);
+            if ((phase - STALKER_TWO_PI) >= 0) phase = phase - STALKER_TWO_PI;
+            inst.animPhase = phase;
+        }
+
+        const idx = ((toF64(inst.animPhase) * STALKER_RAD_TO_LUT) | 0) & STALKER_SIN_MASK;
+        const s = STALKER_SIN_LUT[idx];
+        const c = STALKER_SIN_LUT[(idx + 64) & STALKER_SIN_MASK];
+
+        // s*s mantiene Y >= 0 (2 apoyos suaves por zancada sin hundir los pies en el piso)
+        targetY = (s * s) * bobAmp * moveAmp;
+        targetRx = fadd(pitchBase, c * pitchAmp * moveAmp);
+        targetRz = s * rollAmp * moveAmp;
+    }
+
+    const poseAlpha = clampF64((isBlinded ? 0.55 : 0.25) * dt, 0.0, 1.0);
+    inst.animOutY  = fadd(toF64(inst.animOutY),  (targetY  - toF64(inst.animOutY))  * poseAlpha);
+    inst.animOutRx = fadd(toF64(inst.animOutRx), (targetRx - toF64(inst.animOutRx)) * poseAlpha);
+    inst.animOutRz = fadd(toF64(inst.animOutRz), (targetRz - toF64(inst.animOutRz)) * poseAlpha);
+    inst.animOutRy = fadd(toF64(inst.animYaw), yawJitter);
+}
+
+// ============================================================================
 // ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO (TITULO Y PARTIDA)
 // AthenaEnv moderno inicializa el VU1 con Render.init() y abre cada cuadro 3D
 // con Render.begin(); el modo 3D requiere esta API y el pase RenderObject.render().
@@ -1603,8 +1773,16 @@ function renderHardware3DWorld(
             if ((sdxC * sdxC + sdyC * sdyC) <= 225.0) {
                 const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
                 const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
-                const faceAng = Math.atan2(camX - sx, camZ - sz);
-                drawHwObject(hwStalkerObj, sx, 0.0, sz, 0.0, faceAng, 0.0);
+                if (GAME_SETTINGS.stalkerAnim) {
+                    drawHwObject(
+                        hwStalkerObj,
+                        sx, stalker.animOutY, sz,
+                        stalker.animOutRx, stalker.animOutRy, stalker.animOutRz
+                    );
+                } else {
+                    const faceAng = Math.atan2(camX - sx, camZ - sz);
+                    drawHwObject(hwStalkerObj, sx, 0.0, sz, 0.0, faceAng, 0.0);
+                }
             }
         }
     } finally {
@@ -2640,25 +2818,26 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         ? "ERROR VU1"
         : QUALITY_LABELS[GAME_SETTINGS.qualityIndex];
     const rows = [
-        { label: "MOTOR GRAFICO",  val: qualityLabel },
-        { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
-        { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
-        { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
-        { label: "VIBRACION",      val: GAME_SETTINGS.rumble ? "SI" : "NO" },
-        { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
-        { label: "AUDIO",          val: audioVal },
+        { label: "MOTOR GRAFICO",    val: qualityLabel },
+        { label: "ASPECTO TV",       val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
+        { label: "MARGEN CRT",       val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
+        { label: "SENSIBILIDAD",     val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
+        { label: "VIBRACION",        val: GAME_SETTINGS.rumble ? "SI" : "NO" },
+        { label: "EFECTOS VHS",      val: GAME_SETTINGS.overlays ? "SI" : "NO" },
+        { label: "AUDIO",            val: audioVal },
         { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
-        { label: "GUARDAR",        val: "[X]" }
+        { label: "ANIMACION 3D",     val: GAME_SETTINGS.stalkerAnim ? "SI" : "NO" },
+        { label: "GUARDAR",          val: "[X]" }
     ];
 
-    const startY = py + 44;
-    const rowH = 33;
+    const startY = py + 43;
+    const rowH = 30;
     for (let i = 0; i < rows.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 14, ry - 3, panelW - 28, 30, COL_SEL_BG);
-            Draw.rect(px + 14, ry - 3, 5, 30, COL_SEL_BAR);
+            Draw.rect(px + 14, ry - 3, panelW - 28, 27, COL_SEL_BG);
+            Draw.rect(px + 14, ry - 3, 5, 27, COL_SEL_BAR);
         }
         fnt.scale = Math.fround(0.75);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
@@ -3040,7 +3219,18 @@ const cinStalker = {
     wpIdx: 0,
     hasNextNode: false,
     nextNodeX: toF64(10.0),
-    nextNodeY: toF64(10.0)
+    nextNodeY: toF64(10.0),
+    animPhase: toF64(0.0),
+    animSpasmPhase: toF64(0.0),
+    animPrevX: toF64(99.0),
+    animPrevY: toF64(99.0),
+    animSpeed: toF64(0.0),
+    animYaw: toF64(0.0),
+    animYawInit: false,
+    animOutY: toF64(0.0),
+    animOutRx: toF64(0.0),
+    animOutRy: toF64(0.0),
+    animOutRz: toF64(0.0)
 };
 
 const cinState = {
@@ -3162,6 +3352,8 @@ function startCinematic(sequence, onFinishState) {
     // Ocultar Acechador fuera del radio de culling hasta que la timeline lo invoque
     cinStalker.x = toF64(99.0);
     cinStalker.y = toF64(99.0);
+    cinStalker.state = AI_PATROL;
+    resetStalkerAnim(cinStalker, 99.0, 99.0);
 
     // Forzar refresco de iluminación 3D al cambiar a cinemática
     hwLastFlashState = -1;
@@ -3322,6 +3514,7 @@ function cinEvalEntities(seq, tMs) {
     if (!stalkerVisible) {
         cinStalker.x = toF64(99.0);
         cinStalker.y = toF64(99.0);
+        cinStalker.animYawInit = false;
     }
 }
 
@@ -3548,6 +3741,7 @@ function updateAndRenderCinematic(screenW, screenH, dtMs, dtScale, frameTick, pa
     cinEvalVhs(seq, tMs);
     cinEvalCamera(seq, tMs, frameTick);
     cinEvalEntities(seq, tMs);
+    updateStalkerAnim(cinStalker, cinCamera.x, cinCamera.y, dtScale, false, false);
     cinEvalFade(seq, tMs);
     cinEvalAudioCues(seq, tMs);
     cinEvalSubtitles(seq, tMs);
@@ -3762,10 +3956,12 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
         try {
             if (typeof Image === "function" && fileExistsSafe("assets/textures/hk_logo.png")) {
                 hkLogoImg = new Image("assets/textures/hk_logo.png");
-                if (hkLogoImg) {
+                if (hkLogoImg && typeof hkLogoImg.draw === "function") {
                     if (typeof LINEAR !== "undefined") hkLogoImg.filter = LINEAR;
                     hkLogoImg.width = 216;
                     hkLogoImg.height = 216;
+                } else {
+                    hkLogoImg = null;
                 }
             }
         } catch (_) {
@@ -3782,11 +3978,15 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
     if (alpha < 0) alpha = 0;
     if (alpha > 128) alpha = 128;
 
-    if (hkLogoImg) {
+    if (hkLogoImg && typeof hkLogoImg.draw === "function") {
         const lx = (screenW - 216) >> 1;
         const ly = ((screenH - 216) >> 1) - 18;
-        hkLogoImg.color = rgba(255, 255, 255, alpha);
-        hkLogoImg.draw(lx, ly);
+        try {
+            hkLogoImg.color = rgba(255, 255, 255, alpha);
+            hkLogoImg.draw(lx, ly);
+        } catch (_) {
+            hkLogoImg = null;
+        }
     }
 
     fnt.scale = Math.fround(0.80);
@@ -3891,7 +4091,18 @@ const stalker = {
     wpIdx: 0,
     hasNextNode: false,
     nextNodeX: toF64(10.0),
-    nextNodeY: toF64(10.0)
+    nextNodeY: toF64(10.0),
+    animPhase: toF64(0.0),
+    animSpasmPhase: toF64(0.0),
+    animPrevX: toF64(10.0),
+    animPrevY: toF64(15.5),
+    animSpeed: toF64(0.0),
+    animYaw: toF64(0.0),
+    animYawInit: false,
+    animOutY: toF64(0.0),
+    animOutRx: toF64(0.0),
+    animOutRy: toF64(0.0),
+    animOutRz: toF64(0.0)
 };
 
 let entities = [];
@@ -4042,6 +4253,7 @@ function resetGame() {
     stalker.chaseIntroMs = 0.0;
     stalker.wpIdx = 0;
     stalker.hasNextNode = false;
+    resetStalkerAnim(stalker, stalker.x, stalker.y);
 
     entities = [
         { kind: "fuse", x: toF64(10.0), y: toF64(17.5), taken: false },
@@ -4233,9 +4445,9 @@ Screen.display(() => {
             drawOptionsMenu(SCREEN_W, SCREEN_H, optionsCursor, saveFeedbackTimer, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 9) % 9; playSfx("ui_move", 0, 0.7); }
+            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 10) % 10; playSfx("ui_move", 0, 0.7); }
 
-            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 8 ? 1 : 0);
+            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 9 ? 1 : 0);
             if (adjust !== 0) {
                 if (optionsCursor === 0) {
                     GAME_SETTINGS.qualityIndex = (GAME_SETTINGS.qualityIndex + adjust + 3) % 3;
@@ -4266,10 +4478,12 @@ Screen.display(() => {
                 } else if (optionsCursor === 7) {
                     GAME_SETTINGS.showFps = !GAME_SETTINGS.showFps;
                     if (GAME_SETTINGS.showFps) ensureFpsCounter();
+                } else if (optionsCursor === 8) {
+                    GAME_SETTINGS.stalkerAnim = !GAME_SETTINGS.stalkerAnim;
                 }
             }
 
-            if (pad.justPressed(Pads.CROSS) && optionsCursor === 8) {
+            if (pad.justPressed(Pads.CROSS) && optionsCursor === 9) {
                 saveGameData();
                 saveFeedbackTimer = 90;
                 switchState(returnState);
@@ -4481,6 +4695,7 @@ Screen.display(() => {
             }
 
             const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty, dtMs);
+            updateStalkerAnim(stalker, player.x, player.y, dtScale, ai.los, ai.blinded);
             const dangerRatio = toF64(Math.max(0.0, Math.min(1.0, (7.0 - toF64(ai.distP)) / 7.0)));
 
             if (ai.chaseIntroStarted) {

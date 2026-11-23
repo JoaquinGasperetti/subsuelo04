@@ -72,7 +72,18 @@ const cinStalker = {
     wpIdx: 0,
     hasNextNode: false,
     nextNodeX: toF64(10.0),
-    nextNodeY: toF64(10.0)
+    nextNodeY: toF64(10.0),
+    animPhase: toF64(0.0),
+    animSpasmPhase: toF64(0.0),
+    animPrevX: toF64(99.0),
+    animPrevY: toF64(99.0),
+    animSpeed: toF64(0.0),
+    animYaw: toF64(0.0),
+    animYawInit: false,
+    animOutY: toF64(0.0),
+    animOutRx: toF64(0.0),
+    animOutRy: toF64(0.0),
+    animOutRz: toF64(0.0)
 };
 
 const cinState = {
@@ -194,6 +205,8 @@ function startCinematic(sequence, onFinishState) {
     // Ocultar Acechador fuera del radio de culling hasta que la timeline lo invoque
     cinStalker.x = toF64(99.0);
     cinStalker.y = toF64(99.0);
+    cinStalker.state = AI_PATROL;
+    resetStalkerAnim(cinStalker, 99.0, 99.0);
 
     // Forzar refresco de iluminación 3D al cambiar a cinemática
     hwLastFlashState = -1;
@@ -354,6 +367,7 @@ function cinEvalEntities(seq, tMs) {
     if (!stalkerVisible) {
         cinStalker.x = toF64(99.0);
         cinStalker.y = toF64(99.0);
+        cinStalker.animYawInit = false;
     }
 }
 
@@ -580,6 +594,7 @@ function updateAndRenderCinematic(screenW, screenH, dtMs, dtScale, frameTick, pa
     cinEvalVhs(seq, tMs);
     cinEvalCamera(seq, tMs, frameTick);
     cinEvalEntities(seq, tMs);
+    updateStalkerAnim(cinStalker, cinCamera.x, cinCamera.y, dtScale, false, false);
     cinEvalFade(seq, tMs);
     cinEvalAudioCues(seq, tMs);
     cinEvalSubtitles(seq, tMs);
