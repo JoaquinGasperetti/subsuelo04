@@ -1021,7 +1021,8 @@ let hwStalkerSource = "NONE";
 
 // ============================================================================
 // ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO (TITULO Y PARTIDA)
-// El pase VU1 inicializa la API disponible y usa un camino sin luces si falta Render.begin().
+// AthenaEnv antiguo inicializa el VU1 con Render.setView(); las versiones recientes
+// separan esa inicializacion en Render.init() y Render.begin().
 // ============================================================================
 let bootLoadStep = 0;
 let bootLoadPhase = 0;
@@ -1100,14 +1101,39 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         } catch (_) {}
         const obj = new RenderObject(data);
         if (obj) {
-            obj.position = { x: 0.0, y: 0.0, z: 0.0 };
-            obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
+            if (hwRenderUsesLegacyFrame && typeof obj.setPipeline === "function") {
+                try { obj.setPipeline(Render.PL_NO_LIGHTS); } catch (_) {}
+            } else {
+                obj.position = { x: 0.0, y: 0.0, z: 0.0 };
+                obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
+            }
         }
         return obj;
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error carga 3D";
         return null;
     }
+}
+
+function drawHwObject(obj, x, y, z, rx, ry, rz) {
+    if (!obj) return;
+    // La API antigua de AthenaEnv expone RenderObject.draw(...); la nueva usa
+    // position/rotation + render(). Priorizar el método disponible en cada ELF.
+    if (hwRenderUsesLegacyFrame && typeof obj.draw === "function") {
+        obj.draw(x, y, z, rx, ry, rz);
+        return;
+    }
+    if (typeof obj.render === "function") {
+        obj.position = { x: x, y: y, z: z };
+        obj.rotation = { x: rx, y: ry, z: rz };
+        obj.render();
+        return;
+    }
+    if (typeof obj.draw === "function") {
+        obj.draw(x, y, z, rx, ry, rz);
+        return;
+    }
+    throw new Error("RenderObject sin draw/render");
 }
 
 function loadHwStalker(objPath, texPath) {
@@ -1250,12 +1276,6 @@ function tickProgressive3DStream() {
                 hw3dReady = false;
                 return;
             }
-            if (typeof Render.init !== "function") {
-                hwLoadErrorMsg = "Render.init ausente";
-                hwStreamFailed = true;
-                hw3dReady = false;
-                return;
-            }
             hwRenderUsesLegacyFrame = (typeof Render.begin !== "function");
             if (hwRenderUsesLegacyFrame && typeof Render.PL_NO_LIGHTS === "undefined") {
                 hwLoadErrorMsg = "AthenaEnv sin perfil VU1 compatible";
@@ -1270,12 +1290,20 @@ function tickProgressive3DStream() {
                 return;
             }
             try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
-            if (!hwRenderInitDone) {
+            if (!hwRenderInitDone && typeof Render.init === "function") {
+                // La API actual separa la carga del renderer de la proyeccion.
+                // En la API incluida con athena.elf, setView() hace ambas cosas.
                 Render.init();
                 hwRenderInitDone = true;
             }
             hw3dLastWide = null;
             updateHw3dProjection();
+            if (hwLoadErrorMsg) {
+                hwStreamFailed = true;
+                hw3dReady = false;
+                return;
+            }
+            if (typeof Render.init !== "function") hwRenderInitDone = true; // Render.setView inicializo el renderer legado.
             if (typeof Camera.type === "function" && typeof Camera.LOOKAT !== "undefined") {
                 Camera.type(Camera.LOOKAT);
             }
@@ -1533,11 +1561,11 @@ function renderHardware3DWorld(
 
         // 1. Escenario estatico 3D
         for (let i = 0; i < hwStaticObjs.length; i++) {
-            hwStaticObjs[i].render();
+            drawHwObject(hwStaticObjs[i], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         }
         // 2. Rejas 3D
         if (hwGatesObj && !breakerActive) {
-            hwGatesObj.render();
+            drawHwObject(hwGatesObj, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         }
 
         // 3. Items 3D: reutilizar un RenderObject por tipo evita agotar recursos nativos de PS2.
@@ -1555,9 +1583,9 @@ function renderHardware3DWorld(
             if (!pose) continue;
             if (e.kind !== "breaker" && e.kind !== "note") pose.position.y = 0.55 + bobY;
             pose.rotation.y = (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY;
-            prop.position = pose.position;
-            prop.rotation = pose.rotation;
-            prop.render();
+            drawHwObject(prop,
+                pose.position.x, pose.position.y, pose.position.z,
+                pose.rotation.x, pose.rotation.y, pose.rotation.z);
         }
 
         // 4. El Acechador en 3D (visible hasta 30m / 15 celdas)
@@ -1568,9 +1596,7 @@ function renderHardware3DWorld(
                 const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
                 const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
                 const faceAng = Math.atan2(camX - sx, camZ - sz);
-                hwStalkerObj.position = { x: sx, y: 0.0, z: sz };
-                hwStalkerObj.rotation = { x: 0.0, y: faceAng, z: 0.0 };
-                hwStalkerObj.render();
+                drawHwObject(hwStalkerObj, sx, 0.0, sz, 0.0, faceAng, 0.0);
             }
         }
     } finally {

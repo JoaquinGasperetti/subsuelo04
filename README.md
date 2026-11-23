@@ -60,7 +60,7 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 - Activá **HostFS** en ajustes avanzados y cargá `athena.elf` desde **Sistema -> Iniciar archivo...**.
 
 ## Novedades de esta corrección
-- **Configuración del pase VU1**: Se solicita Z16S y se comprueba que AthenaEnv lo haya activado. El runtime actual usa `Render.init()` y `Render.begin()` cuando están disponibles; si falta `Render.begin()`, usa un perfil VU1 sin iluminación dinámica para mantener compatibilidad con el `athena.elf` incluido. El diagnóstico muestra `VU1L` para este camino y restaura profundidad para el HUD.
+- **Compatibilidad del pase VU1**: Se solicita Z16S y se comprueba que AthenaEnv lo haya activado. El `athena.elf` incluido expone la API antigua: `Render.setView()` inicializa el motor y los objetos se dibujan con `RenderObject.draw(...)`. El juego también admite la API nueva (`Render.init()`, `Render.begin()` y `render()`) cuando está disponible. En la ruta antigua usa el perfil VU1 sin iluminación dinámica; el diagnóstico muestra `VU1L` y restaura profundidad para el HUD.
 - **Recorte de geometría del mapa**: Las mallas del escenario usan `accurate_clipping` de AthenaEnv para recortar triángulos que atraviesan los planos de cámara; el cargador ahora respeta esa opción por modelo.
 - **Prueba del mapa 3D**: La carga progresiva actual incluye piso, techo, paredes, salida, rejas e ítems. El Acechador está omitido deliberadamente para aislar los bloqueos del render del escenario; `stalker.obj` todavía no se carga en esta prueba.
 - **Textos de menús y PDA**: Se usa `assets/fonts/ui.ttf` (FreeType); los rótulos pequeños del PDA ahora se dibujan a escala 0.72 para evitar la reducción que los volvía borrosos en 480i.
