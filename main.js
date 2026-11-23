@@ -1021,7 +1021,7 @@ let hwStalkerSource = "NONE";
 
 // ============================================================================
 // ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO (TITULO Y PARTIDA)
-// Compatible con athena.elf con o sin Render.init()/Render.begin().
+// El pase VU1 inicializa la API disponible y usa un camino sin luces si falta Render.begin().
 // ============================================================================
 let bootLoadStep = 0;
 let bootLoadPhase = 0;
@@ -1043,6 +1043,7 @@ const LOAD_SPINNERS = ["|", "/", "-", "\\"];
 // Carga progresiva 3D en pantalla de carga dedicada (entre Menu Principal y Partida)
 let hwStreamStep = 0;
 let hwRenderInitDone = false;
+let hwRenderUsesLegacyFrame = false;
 let hwStreamCooldown = 4;
 let hwStreamDone = false;
 let hwStreamFailed = false;
@@ -1092,9 +1093,11 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (!data) return null;
         if (tex) hwKeptTextures.push(tex);
         hwKeptRenderData.push(data);
-        try { data.accurate_clipping = !!accurateClip; } catch (_) {}
+        try { data.accurate_clipping = !!accurateClip && !hwRenderUsesLegacyFrame; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
-        try { data.pipeline = Render.PL_DEFAULT; } catch (_) {}
+        try {
+            data.pipeline = hwRenderUsesLegacyFrame ? Render.PL_NO_LIGHTS : Render.PL_DEFAULT;
+        } catch (_) {}
         const obj = new RenderObject(data);
         if (obj) {
             obj.position = { x: 0.0, y: 0.0, z: 0.0 };
@@ -1240,9 +1243,22 @@ function tickProgressive3DStream() {
             hw3dAttempted = true;
             if (typeof Render === "undefined" || typeof Render.setView !== "function" ||
                 typeof RenderData !== "function" || typeof RenderObject !== "function" ||
-                typeof Camera === "undefined" || typeof Lights === "undefined" ||
+                typeof Camera === "undefined" ||
                 typeof Image !== "function" || !fileExistsSafe("assets/models/map_floor.obj")) {
                 hwLoadErrorMsg = "API 3D o mapa ausente";
+                hwStreamFailed = true;
+                hw3dReady = false;
+                return;
+            }
+            if (typeof Render.init !== "function") {
+                hwLoadErrorMsg = "Render.init ausente";
+                hwStreamFailed = true;
+                hw3dReady = false;
+                return;
+            }
+            hwRenderUsesLegacyFrame = (typeof Render.begin !== "function");
+            if (hwRenderUsesLegacyFrame && typeof Render.PL_NO_LIGHTS === "undefined") {
+                hwLoadErrorMsg = "AthenaEnv sin perfil VU1 compatible";
                 hwStreamFailed = true;
                 hw3dReady = false;
                 return;
@@ -1254,12 +1270,8 @@ function tickProgressive3DStream() {
                 return;
             }
             try { Screen.clearColor(rgba(4, 5, 8, 128)); } catch (_) {}
-            // En builds recientes de AthenaEnv existe Render.init(); en el athena.elf del repo
-            // la inicializacion 3D VU1 la realiza directamente Render.setView().
             if (!hwRenderInitDone) {
-                if (typeof Render.init === "function") {
-                    Render.init();
-                }
+                Render.init();
                 hwRenderInitDone = true;
             }
             hw3dLastWide = null;
@@ -1268,26 +1280,30 @@ function tickProgressive3DStream() {
                 Camera.type(Camera.LOOKAT);
             }
 
-            let l0 = 0;
-            let l1 = 1;
-            try {
-                if (typeof Lights.new === "function") {
-                    const a = Lights.new();
-                    const b = Lights.new();
-                    if (typeof a === "number" && a >= 0 && a <= 3) l0 = a;
-                    if (typeof b === "number" && b >= 0 && b <= 3) l1 = b;
-                }
-            } catch (_) {}
-            hwLightMain = l0;
-            hwLightFill = l1;
-            try {
-                Lights.set(hwLightMain, Lights.DIRECTION, 0.0, -0.25, -1.0);
-                Lights.set(hwLightMain, Lights.AMBIENT, 0.16, 0.17, 0.20);
-                Lights.set(hwLightMain, Lights.DIFFUSE, 0.85, 0.82, 0.78);
-                Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
-                Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
-                Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
-            } catch (_) {}
+            hwLightMain = -1;
+            hwLightFill = -1;
+            if (!hwRenderUsesLegacyFrame && typeof Lights !== "undefined") {
+                let l0 = 0;
+                let l1 = 1;
+                try {
+                    if (typeof Lights.new === "function") {
+                        const a = Lights.new();
+                        const b = Lights.new();
+                        if (typeof a === "number" && a >= 0 && a <= 3) l0 = a;
+                        if (typeof b === "number" && b >= 0 && b <= 3) l1 = b;
+                    }
+                } catch (_) {}
+                hwLightMain = l0;
+                hwLightFill = l1;
+                try {
+                    Lights.set(hwLightMain, Lights.DIRECTION, 0.0, -0.25, -1.0);
+                    Lights.set(hwLightMain, Lights.AMBIENT, 0.16, 0.17, 0.20);
+                    Lights.set(hwLightMain, Lights.DIFFUSE, 0.85, 0.82, 0.78);
+                    Lights.set(hwLightFill, Lights.DIRECTION, 0.0, -1.0, 0.0);
+                    Lights.set(hwLightFill, Lights.AMBIENT, 0.16, 0.18, 0.22);
+                    Lights.set(hwLightFill, Lights.DIFFUSE, 0.28, 0.30, 0.36);
+                } catch (_) {}
+            }
             hwStaticObjs = [];
         } else if (step.kind === "static") {
             const o = loadHwMesh(step.obj, step.tex, !!step.clip);
@@ -1498,9 +1514,7 @@ function renderHardware3DWorld(
         } catch (_) {}
     }
     try {
-        if (typeof Render.begin === "function") {
-            Render.begin();
-        }
+        if (!hwRenderUsesLegacyFrame) Render.begin();
         // AthenaEnv Camera.target también ajusta camera_position usando el target anterior.
         // Fijar la posición después del target evita desplazar la cámara al girar o caminar.
         Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
@@ -3786,7 +3800,8 @@ Screen.display(() => {
                     fnt.scale = Math.fround(0.58);
                     fnt.color = rgba(120, 255, 120, 128);
                     fnt.print(sx + 6, topY + 43, "X:" + player.x.toFixed(1) + " Y:" + player.y.toFixed(1) +
-                        " 3D:" + (hw3dReady ? "VU1" : "2.5D") + " EN:" + hwStalkerSource + " FPS:" + fps);
+                        " 3D:" + (hw3dReady ? (hwRenderUsesLegacyFrame ? "VU1L" : "VU1") : "2.5D") +
+                        " EN:" + hwStalkerSource + " FPS:" + fps);
                 } else {
                     Draw.rect(sx + hudW - 76, topY + 33, 76, 18, rgba(0, 0, 0, 100));
                     fnt.scale = Math.fround(0.66);
