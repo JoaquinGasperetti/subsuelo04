@@ -19,7 +19,8 @@ const GAME_SETTINGS = {
     aspect16x9: true,
     // Sensibilidad de cámara: 0 = BAJA, 1 = MEDIA, 2 = ALTA
     sensitivityIndex: 1,
-    // Vibración DualShock 2 (desactivada por defecto para máxima estabilidad SIO2 en OPL)
+    // AthenaEnv incluido tiene una llamada nativa de vibración que bloquea/crashea
+    // en hardware real. Se mantiene desactivada hasta contar con un ELF corregido.
     rumble: false,
     // Efectos visuales VHS, viñeta y partículas
     overlays: true,
@@ -219,7 +220,8 @@ function loadSaveData() {
             if (typeof data.sensitivityIndex === "number" && data.sensitivityIndex >= 0 && data.sensitivityIndex <= 2) {
                 GAME_SETTINGS.sensitivityIndex = data.sensitivityIndex | 0;
             }
-            if (typeof data.rumble === "boolean") GAME_SETTINGS.rumble = data.rumble;
+            // Ignorar valores guardados: la API nativa de vibración no es segura en este ELF.
+            GAME_SETTINGS.rumble = false;
             if (typeof data.overlays === "boolean") GAME_SETTINGS.overlays = data.overlays;
             if (typeof data.audioVolume === "number" && data.audioVolume >= 0 && data.audioVolume <= 100) {
                 GAME_SETTINGS.audioVolume = data.audioVolume | 0;
@@ -255,7 +257,7 @@ function saveGameData() {
             crtSafe: GAME_SETTINGS.crtSafe,
             aspect16x9: GAME_SETTINGS.aspect16x9,
             sensitivityIndex: GAME_SETTINGS.sensitivityIndex,
-            rumble: GAME_SETTINGS.rumble,
+            rumble: false,
             overlays: GAME_SETTINGS.overlays,
             audioVolume: GAME_SETTINGS.audioVolume,
             showFps: GAME_SETTINGS.showFps,
@@ -558,6 +560,22 @@ function isPosWalkable(grid, nx, ny, margin = 0.25) {
     if (grid[y1][x0] !== 0) return false;
     if (grid[y1][x1] !== 0) return false;
     return true;
+}
+
+// Avanza un eje en pasos cortos para que un cuadro lento o un cambio futuro de
+// velocidad no permita atravesar una celda sólida entre la posición anterior y la nueva.
+function movePlayerAxis(grid, x, y, delta, moveX, margin = 0.25) {
+    const steps = Math.max(1, Math.ceil(Math.abs(delta) / 0.10));
+    const step = delta / steps;
+    let moved = moveX ? x : y;
+    for (let i = 0; i < steps; i++) {
+        const candidate = moved + step;
+        const nx = moveX ? candidate : x;
+        const ny = moveX ? y : candidate;
+        if (!isPosWalkable(grid, nx, ny, margin)) break;
+        moved = candidate;
+    }
+    return moved;
 }
 
 const LORE_NOTES = [
@@ -1095,7 +1113,9 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (!data) return null;
         if (tex) hwKeptTextures.push(tex);
         hwKeptRenderData.push(data);
-        try { data.accurate_clipping = !!accurateClip && !hwRenderUsesLegacyFrame; } catch (_) {}
+        // El clip de GS también es necesario en el renderer legado: sin él, las
+        // mallas grandes del mapa desaparecen al cruzar el borde del frustum.
+        try { data.accurate_clipping = !!accurateClip; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try {
             data.pipeline = hwRenderUsesLegacyFrame ? Render.PL_NO_LIGHTS : Render.PL_DEFAULT;
@@ -1157,12 +1177,9 @@ function updateHw3dProjection() {
     if (hw3dLastWide === isWide) return;
     hw3dLastWide = isWide;
     try {
-        // El mapa mide ~40 unidades; un far plane corto mejora mucho la precision
-        // del Z16S de PS2 y evita z-fighting al caminar o girar.
-        // El near plane anterior (1 m) cortaba paredes al acercarse: el margen
-        // de colision permite quedar a 0.5 m. Bajarlo evita que desaparezcan
-        // al mirar de costado; el far plane cubre la diagonal completa del mapa.
-        Render.setView(isWide ? 60.0 : 54.0, 0.25, 56.0);
+        // Mantener el near plane corto evita que paredes cercanas desaparezcan
+        // al mirar de costado. El far plane cubre la diagonal del escenario.
+        Render.setView(isWide ? 60.0 : 54.0, 0.25, 52.0);
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error Render.setView";
     }
@@ -1545,8 +1562,8 @@ function renderHardware3DWorld(
     }
     try {
         if (!hwRenderUsesLegacyFrame) Render.begin();
-        // AthenaEnv Camera.target también ajusta camera_position usando el target anterior.
-        // Fijar la posición después del target evita desplazar la cámara al girar o caminar.
+        // Camera.target conserva el desplazamiento del objetivo anterior y mueve
+        // la posición de cámara. Por eso se fija la posición al final en cada frame.
         Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
         Camera.position(camX, WORLD_EYE_H, camZ);
         Camera.update();
@@ -2608,7 +2625,7 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
         { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
         { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
-        { label: "VIBRACION",      val: GAME_SETTINGS.rumble ? "SI" : "NO" },
+        { label: "VIBRACION",      val: "DESACTIVADA (ELF)" },
         { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
         { label: "AUDIO",          val: audioVal },
         { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
@@ -3128,29 +3145,11 @@ const stalker = {
 
 let entities = [];
 
-let lastRumbleBig = 0;
-let lastRumbleSmall = 0;
-let lastRumbleTick = 0;
-function triggerRumble(big, small) {
-    if (!GAME_SETTINGS.rumble) {
-        big = 0;
-        small = 0;
-    }
-    if (big === lastRumbleBig && small === lastRumbleSmall) return;
-    // En PS2 real nunca llamar Pads.rumble/padSetActDirect antes de estabilizar SIO2 ni saturar el bus
-    if (frameTick < 30 || (frameTick - lastRumbleTick) < 15) return;
-    try {
-        if (typeof Pads.getState === "function") {
-            const st = Pads.getState(0);
-            if (st !== 6) return;
-        }
-        if (typeof Pads.rumble === "function") {
-            lastRumbleBig = big;
-            lastRumbleSmall = small;
-            lastRumbleTick = frameTick;
-            Pads.rumble(0, big, small);
-        }
-    } catch (_) {}
+function triggerRumble(_big, _small) {
+    // En el athena.elf distribuido, Pads.rumble llama directamente al driver
+    // SIO2; desde JavaScript no se puede comprobar si el actuador fue inicializado.
+    // No emitir la llamada nativa evita el bloqueo/crash en mandos y adaptadores.
+    return;
 }
 
 function triggerScreenFlash(r, g, b, alpha) {
@@ -3458,9 +3457,6 @@ Screen.display(() => {
                     GAME_SETTINGS.crtSafe = !GAME_SETTINGS.crtSafe;
                 } else if (optionsCursor === 3) {
                     GAME_SETTINGS.sensitivityIndex = (GAME_SETTINGS.sensitivityIndex + adjust + 3) % 3;
-                } else if (optionsCursor === 4) {
-                    GAME_SETTINGS.rumble = !GAME_SETTINGS.rumble;
-                    if (!GAME_SETTINGS.rumble) triggerRumble(0, 0);
                 } else if (optionsCursor === 5) {
                     GAME_SETTINGS.overlays = !GAME_SETTINGS.overlays;
                 } else if (optionsCursor === 6) {
@@ -3588,17 +3584,17 @@ Screen.display(() => {
 
             let bumpedGate = false;
             const nextX = fadd(player.x, dx);
-            if (isPosWalkable(worldGrid, nextX, player.y, 0.25)) {
-                player.x = nextX;
-            } else if (getCell(worldGrid, (fadd(nextX, (dx > 0) ? 0.28 : -0.28)) | 0, player.y | 0) === 5) {
+            const resolvedX = movePlayerAxis(worldGrid, player.x, player.y, dx, true, 0.25);
+            if (Math.abs(resolvedX - nextX) > 0.0001 && getCell(worldGrid, (fadd(nextX, (dx > 0) ? 0.28 : -0.28)) | 0, player.y | 0) === 5) {
                 bumpedGate = true;
             }
+            player.x = resolvedX;
             const nextY = fadd(player.y, dy);
-            if (isPosWalkable(worldGrid, player.x, nextY, 0.25)) {
-                player.y = nextY;
-            } else if (getCell(worldGrid, player.x | 0, (fadd(nextY, (dy > 0) ? 0.28 : -0.28)) | 0) === 5) {
+            const resolvedY = movePlayerAxis(worldGrid, player.x, player.y, dy, false, 0.25);
+            if (Math.abs(resolvedY - nextY) > 0.0001 && getCell(worldGrid, player.x | 0, (fadd(nextY, (dy > 0) ? 0.28 : -0.28)) | 0) === 5) {
                 bumpedGate = true;
             }
+            player.y = resolvedY;
             if (bumpCooldown > 0) bumpCooldown--;
             if (bumpedGate && bumpCooldown === 0) {
                 bumpCooldown = 60;
