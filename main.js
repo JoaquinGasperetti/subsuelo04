@@ -1069,13 +1069,13 @@ let mapLoadPhase = 0;
 
 const HW3D_STREAM_STEPS = [
     { kind: "init",    label: "MOTOR 3D (VU1 / CAMARA)" },
-    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         clip: true, label: "MAPA: PISO" },
-    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       clip: true, label: "MAPA: TECHO" },
+    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         clip: false, label: "MAPA: PISO" },
+    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       clip: false, label: "MAPA: TECHO" },
     { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", clip: true, label: "MAPA: PAREDES" },
     { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     clip: true, label: "MAPA: ESTRUCTURAS" },
     { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   clip: true, label: "MAPA: ZONA RITUAL" },
     { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     clip: true, label: "MAPA: SALIDA NORTE" },
-    { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS" },
+    { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          clip: true, label: "MAPA: REJAS" },
     { kind: "stalker", obj: "assets/models/stalker.obj",            tex: "assets/textures/stalker.png",       label: "ENEMIGO: ACECHADOR 3D" },
     { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEMS: FUSIBLES" },
     { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEMS: BATERIAS" },
@@ -1111,9 +1111,10 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (!data) return null;
         if (tex) hwKeptTextures.push(tex);
         hwKeptRenderData.push(data);
-        // El athena.elf legado se congela si se activa el recorte preciso.
-        // En ese motor usamos el recorte normal; la API nueva sí admite el preciso.
-        try { data.accurate_clipping = !!accurateClip && !hwRenderUsesLegacyFrame; } catch (_) {}
+        // El recorte preciso se ejecuta en el VU1 antes de enviar triángulos fuera
+        // del volumen visible al GS. Reservarlo para paredes/rejas/salida mantiene
+        // piso, techo y modelos pequeños en el camino rápido, sin crear meshes nuevos.
+        try { data.accurate_clipping = !!accurateClip; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try {
             data.pipeline = hwRenderUsesLegacyFrame ? Render.PL_NO_LIGHTS : Render.PL_DEFAULT;
@@ -1362,7 +1363,7 @@ function tickProgressive3DStream() {
             hwStalkerObj = loadHwStalker(step.obj, step.tex);
             if (hwStaticObjs.length >= 4 && hwStalkerObj) hw3dReady = true;
         } else if (step.kind === "gates") {
-            hwGatesObj = loadHwMesh(step.obj, step.tex, true);
+            hwGatesObj = loadHwMesh(step.obj, step.tex, !!step.clip);
         } else if (step.kind === "prop") {
             const o = loadHwMesh(step.obj, step.tex, false);
             if (o) hwPropObjs[step.key] = o;
