@@ -995,7 +995,7 @@ const renderStats = { cols: 0, minD: 99.0, maxD: 0.0, wallMode: 0, numRays: 128 
 // ============================================================================
 // MOTOR 3D REAL POR HARDWARE PS2 (VU1 + VU0 + GS via AthenaEnv V4)
 // Escala real: 1 celda del mapa = 2.0 m, techo = 2.6 m, ojos = 1.55 m
-// Soporta automaticamente assets/models/stalker.glb cuando lo agregues
+// El Acechador 3D se carga desde OBJ junto al escenario para evitar carga en partida.
 // ============================================================================
 const WORLD_CELL_SIZE = 2.0;
 const WORLD_EYE_H = 1.55;
@@ -1060,6 +1060,7 @@ const HW3D_STREAM_STEPS = [
     { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   clip: true, label: "MAPA: ZONA RITUAL" },
     { kind: "static",  obj: "assets/models/map_exit.obj",           tex: "assets/textures/exit_door.png",     clip: true, label: "MAPA: SALIDA NORTE" },
     { kind: "gates",   obj: "assets/models/map_gates.obj",          tex: "assets/textures/gate.png",          label: "MAPA: REJAS" },
+    { kind: "stalker", obj: "assets/models/stalker.obj",            tex: "assets/textures/stalker.png",       label: "ENEMIGO: ACECHADOR 3D" },
     { kind: "prop",    key: "fuse",    obj: "assets/models/fuse.obj",    tex: "assets/textures/fuse.png",     label: "ITEMS: FUSIBLES" },
     { kind: "prop",    key: "battery", obj: "assets/models/battery.obj", tex: "assets/textures/battery.png",  label: "ITEMS: BATERIAS" },
     { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEMS: DISYUNTOR" },
@@ -1067,10 +1068,10 @@ const HW3D_STREAM_STEPS = [
 ];
 
 const MAP_PCT_LABELS = [
-    "0%   (0/12)",  "8%   (1/12)",  "17%  (2/12)",  "25%  (3/12)",
-    "33%  (4/12)",  "42%  (5/12)",  "50%  (6/12)",  "58%  (7/12)",
-    "67%  (8/12)",  "75%  (9/12)",  "83%  (10/12)", "92%  (11/12)",
-    "100% (12/12)"
+    "0%   (0/13)",  "8%   (1/13)",  "15%  (2/13)", "23%  (3/13)",
+    "31%  (4/13)",  "38%  (5/13)",  "46%  (6/13)", "54%  (7/13)",
+    "62%  (8/13)",  "69%  (9/13)",  "77%  (10/13)", "85% (11/13)",
+    "92%  (12/13)", "100% (13/13)"
 ];
 
 const STREAM_3D_BADGES = [
@@ -1158,7 +1159,10 @@ function updateHw3dProjection() {
     try {
         // El mapa mide ~40 unidades; un far plane corto mejora mucho la precision
         // del Z16S de PS2 y evita z-fighting al caminar o girar.
-        Render.setView(isWide ? 60.0 : 54.0, 1.0, 80.0);
+        // El near plane anterior (1 m) cortaba paredes al acercarse: el margen
+        // de colision permite quedar a 0.5 m. Bajarlo evita que desaparezcan
+        // al mirar de costado; el far plane cubre la diagonal completa del mapa.
+        Render.setView(isWide ? 60.0 : 54.0, 0.25, 56.0);
     } catch (e) {
         hwLoadErrorMsg = e ? String(e) : "Error Render.setView";
     }
@@ -1341,9 +1345,7 @@ function tickProgressive3DStream() {
             }
         } else if (step.kind === "stalker") {
             hwStalkerObj = loadHwStalker(step.obj, step.tex);
-            if (hwStaticObjs.length >= 4) {
-                hw3dReady = true;
-            }
+            if (hwStaticObjs.length >= 4 && hwStalkerObj) hw3dReady = true;
         } else if (step.kind === "gates") {
             hwGatesObj = loadHwMesh(step.obj, step.tex, true);
         } else if (step.kind === "prop") {
@@ -1456,7 +1458,7 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.72);
     fnt.color = rgba(205, 210, 224, 128);
-    fnt.print(px + 24, py + 54, "PRUEBA 3D: ESCENARIO SIN STALKER");
+    fnt.print(px + 24, py + 54, "CARGANDO MAPA 3D Y ACECHADOR");
 
     const total = HW3D_STREAM_STEPS.length;
     const clampedStep = hwStreamStep < 0 ? 0 : (hwStreamStep > total ? total : hwStreamStep);
@@ -1475,7 +1477,7 @@ function drawMapLoadingScreen(screenW, screenH, fnt) {
 
     fnt.scale = Math.fround(0.74);
     fnt.color = rgba(255, 232, 160, 128);
-    fnt.print(barX, barY + 38, MAP_PCT_LABELS[clampedStep] || "0%   (0/12)");
+    fnt.print(barX, barY + 38, MAP_PCT_LABELS[clampedStep] || "0%   (0/13)");
 
     const spinIdx = ((frameTick >> 2) & 3);
     fnt.scale = Math.fround(0.74);
