@@ -19,8 +19,7 @@ const GAME_SETTINGS = {
     aspect16x9: true,
     // Sensibilidad de cámara: 0 = BAJA, 1 = MEDIA, 2 = ALTA
     sensitivityIndex: 1,
-    // AthenaEnv incluido tiene una llamada nativa de vibración que bloquea/crashea
-    // en hardware real. Se mantiene desactivada hasta contar con un ELF corregido.
+    // Vibración DualShock 2
     rumble: false,
     // Efectos visuales VHS, viñeta y partículas
     overlays: true,
@@ -220,8 +219,7 @@ function loadSaveData() {
             if (typeof data.sensitivityIndex === "number" && data.sensitivityIndex >= 0 && data.sensitivityIndex <= 2) {
                 GAME_SETTINGS.sensitivityIndex = data.sensitivityIndex | 0;
             }
-            // Ignorar valores guardados: la API nativa de vibración no es segura en este ELF.
-            GAME_SETTINGS.rumble = false;
+            if (typeof data.rumble === "boolean") GAME_SETTINGS.rumble = data.rumble;
             if (typeof data.overlays === "boolean") GAME_SETTINGS.overlays = data.overlays;
             if (typeof data.audioVolume === "number" && data.audioVolume >= 0 && data.audioVolume <= 100) {
                 GAME_SETTINGS.audioVolume = data.audioVolume | 0;
@@ -257,7 +255,7 @@ function saveGameData() {
             crtSafe: GAME_SETTINGS.crtSafe,
             aspect16x9: GAME_SETTINGS.aspect16x9,
             sensitivityIndex: GAME_SETTINGS.sensitivityIndex,
-            rumble: false,
+            rumble: GAME_SETTINGS.rumble,
             overlays: GAME_SETTINGS.overlays,
             audioVolume: GAME_SETTINGS.audioVolume,
             showFps: GAME_SETTINGS.showFps,
@@ -1113,9 +1111,7 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         if (!data) return null;
         if (tex) hwKeptTextures.push(tex);
         hwKeptRenderData.push(data);
-        // El clip de GS también es necesario en el renderer legado: sin él, las
-        // mallas grandes del mapa desaparecen al cruzar el borde del frustum.
-        try { data.accurate_clipping = !!accurateClip; } catch (_) {}
+        try { data.accurate_clipping = !!accurateClip && !hwRenderUsesLegacyFrame; } catch (_) {}
         try { data.face_culling = Render.CULL_FACE_NONE; } catch (_) {}
         try {
             data.pipeline = hwRenderUsesLegacyFrame ? Render.PL_NO_LIGHTS : Render.PL_DEFAULT;
@@ -2625,7 +2621,7 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
         { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
         { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
-        { label: "VIBRACION",      val: "DESACTIVADA (ELF)" },
+        { label: "VIBRACION",      val: GAME_SETTINGS.rumble ? "SI" : "NO" },
         { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
         { label: "AUDIO",          val: audioVal },
         { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
@@ -3145,11 +3141,33 @@ const stalker = {
 
 let entities = [];
 
-function triggerRumble(_big, _small) {
-    // En el athena.elf distribuido, Pads.rumble llama directamente al driver
-    // SIO2; desde JavaScript no se puede comprobar si el actuador fue inicializado.
-    // No emitir la llamada nativa evita el bloqueo/crash en mandos y adaptadores.
-    return;
+let lastRumbleBig = 0;
+let lastRumbleSmall = 0;
+let lastRumbleTick = 0;
+function triggerRumble(big, small) {
+    if (!GAME_SETTINGS.rumble) {
+        big = 0;
+        small = 0;
+    }
+    if (big === lastRumbleBig && small === lastRumbleSmall) return;
+    if (frameTick < 30 || (frameTick - lastRumbleTick) < 15) return;
+    try {
+        if (typeof Pads.isActive === "function" && !Pads.isActive(0)) return;
+        if (typeof Pads.getState === "function") {
+            const st = Pads.getState(0);
+            const stable = (typeof Pads.STATE_STABLE === "number") ? Pads.STATE_STABLE : 6;
+            const finding = (typeof Pads.STATE_FINDCTP1 === "number") ? Pads.STATE_FINDCTP1 : 5;
+            if (st !== stable && st !== finding) return;
+        }
+        if (typeof Pads.rumble === "function") {
+            const safeBig = clampF64(big | 0, 0, 255) | 0;
+            const safeSmall = small ? 1 : 0;
+            lastRumbleBig = big;
+            lastRumbleSmall = small;
+            lastRumbleTick = frameTick;
+            Pads.rumble(0, safeSmall, safeBig);
+        }
+    } catch (_) {}
 }
 
 function triggerScreenFlash(r, g, b, alpha) {
@@ -3457,6 +3475,9 @@ Screen.display(() => {
                     GAME_SETTINGS.crtSafe = !GAME_SETTINGS.crtSafe;
                 } else if (optionsCursor === 3) {
                     GAME_SETTINGS.sensitivityIndex = (GAME_SETTINGS.sensitivityIndex + adjust + 3) % 3;
+                } else if (optionsCursor === 4) {
+                    GAME_SETTINGS.rumble = !GAME_SETTINGS.rumble;
+                    if (!GAME_SETTINGS.rumble) triggerRumble(0, 0);
                 } else if (optionsCursor === 5) {
                     GAME_SETTINGS.overlays = !GAME_SETTINGS.overlays;
                 } else if (optionsCursor === 6) {
