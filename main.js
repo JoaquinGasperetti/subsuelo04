@@ -1754,6 +1754,7 @@ function render3DWorld(
     let spanTop0 = 0, spanBot0 = 0, spanH0 = 0;
     let spanTop1 = 0, spanBot1 = 0, spanH1 = 0;
     let spanCR = 0, spanCG = 0, spanCB = 0;
+    let spanCR1 = 0, spanCG1 = 0, spanCB1 = 0;
 
     // ------------------------------------------------------------------------
     // 2. RAYCASTING DDA + AGRUPAMIENTO POR TRAMOS (SPAN BATCH)
@@ -1768,8 +1769,8 @@ function render3DWorld(
 
         const absRayX = rayDirX < 0 ? -rayDirX : rayDirX;
         const absRayY = rayDirY < 0 ? -rayDirY : rayDirY;
-        const deltaDistX = (absRayX - 1e-6) < 0 ? 1e6 : (1.0 / absRayX);
-        const deltaDistY = (absRayY - 1e-6) < 0 ? 1e6 : (1.0 / absRayY);
+        const deltaDistX = (absRayX - 1e-9) < 0 ? 1e30 : (1.0 / absRayX);
+        const deltaDistY = (absRayY - 1e-9) < 0 ? 1e30 : (1.0 / absRayY);
 
         let stepX = 0, stepY = 0;
         let sideDistX = F64_ZERO, sideDistY = F64_ZERO;
@@ -1818,7 +1819,6 @@ function render3DWorld(
                 if (!hasGate) {
                     hasGate = true;
                     gateDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
-                    if ((gateDist - 0.14) < 0) gateDist = toF64(0.14);
                     gateSide = side;
                 }
             } else if (cell > 0) {
@@ -1826,7 +1826,19 @@ function render3DWorld(
             }
         }
 
+        if (hit === 0) {
+            zBuffer[i] = toF64(1e20);
+            continue;
+        }
+        if (hasGate) {
+            if (gateDist !== gateDist || gateDist > 1e20) hasGate = false;
+            else if ((gateDist - 0.14) < 0) gateDist = toF64(0.14);
+        }
         let perpDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
+        if (perpDist !== perpDist || perpDist > 1e20) {
+            zBuffer[i] = toF64(1e20);
+            continue;
+        }
         if ((perpDist - 0.14) < 0) perpDist = toF64(0.14);
         zBuffer[i] = perpDist;
 
@@ -1835,8 +1847,8 @@ function render3DWorld(
         const wallH = (wallProjH / perpDist) | 0;
         const rawStart = halfH - (wallH >> 1);
         const rawEnd = rawStart + wallH;
-        const drawStart = rawStart < 0 ? 0 : rawStart;
-        const drawEnd = rawEnd > screenH ? screenH : rawEnd;
+        const drawStart = Math.max(0, Math.min(screenH, rawStart));
+        const drawEnd = Math.max(0, Math.min(screenH, rawEnd));
         const clippedH = drawEnd - drawStart;
 
         const beam = ((effFlash - 0.0) > 0) ? (BEAM_PROF[i] * effFlash) : 0.0;
@@ -1886,8 +1898,6 @@ function render3DWorld(
 
             if (renderStats.wallMode === 1) {
                 Draw.rect(screenX, drawStart, colW, clippedH, COL_MAGENTA);
-            } else {
-                Draw.rect(screenX, drawStart, colW, clippedH, (cR | (cG << 8) | (cB << 16) | ALPHA_OPAQUE) >>> 0);
             }
 
             const cellKey = (mapY << 7) | (mapX << 1) | side;
@@ -1896,9 +1906,12 @@ function render3DWorld(
                 spanTop1 = drawStart;
                 spanBot1 = drawEnd;
                 spanH1 = wallH;
+                spanCR1 = cR;
+                spanCG1 = cG;
+                spanCB1 = cB;
             } else {
                 if (spanKey !== -1 && renderStats.wallMode === 0) {
-                    flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, exitUnlocked, emerFlicker);
+                    flushWallSpan(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, spanCR1, spanCG1, spanCB1, exitUnlocked, emerFlicker);
                 }
                 spanKey = cellKey;
                 spanHit = hit;
@@ -1913,6 +1926,9 @@ function render3DWorld(
                 spanCR = cR;
                 spanCG = cG;
                 spanCB = cB;
+                spanCR1 = cR;
+                spanCG1 = cG;
+                spanCB1 = cB;
             }
         }
 
@@ -1920,11 +1936,15 @@ function render3DWorld(
         // 2B. REJAS DE SEGURIDAD 3D TRANSPARENTES
         // --------------------------------------------------------------------
         if (hasGate) {
+            if (spanKey !== -1 && renderStats.wallMode === 0) {
+                flushWallSpan(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, spanCR1, spanCG1, spanCB1, exitUnlocked, emerFlicker);
+                spanKey = -1;
+            }
             const gWallH = (wallProjH / gateDist) | 0;
             const gRawStart = halfH - (gWallH >> 1);
             const gRawEnd = gRawStart + gWallH;
-            const gStart = gRawStart < 0 ? 0 : gRawStart;
-            const gEnd = gRawEnd > screenH ? screenH : gRawEnd;
+            const gStart = Math.max(0, Math.min(screenH, gRawStart));
+            const gEnd = Math.max(0, Math.min(screenH, gRawEnd));
             const gClippedH = gEnd - gStart;
 
             if (gClippedH > 0) {
@@ -1968,7 +1988,7 @@ function render3DWorld(
     }
 
     if (spanKey !== -1 && renderStats.wallMode === 0) {
-        flushWallSpanDetails(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, exitUnlocked, emerFlicker);
+        flushWallSpan(screenH, spanHit, spanX0, spanX1, spanTop0, spanBot0, spanH0, spanTop1, spanBot1, spanH1, spanCR, spanCG, spanCB, spanCR1, spanCG1, spanCB1, exitUnlocked, emerFlicker);
     }
 
     // ------------------------------------------------------------------------
@@ -2236,7 +2256,14 @@ function render3DWorld(
     }
 }
 
-function flushWallSpanDetails(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, h1, cR, cG, cB, exitUnlocked, emerFlicker) {
+function flushWallSpan(screenH, hit, x0, x1, top0, bot0, h0, top1, bot1, h1, cR0, cG0, cB0, cR1, cG1, cB1, exitUnlocked, emerFlicker) {
+    const col0 = rgba(cR0, cG0, cB0, 128);
+    const col1 = rgba(cR1, cG1, cB1, 128);
+    Draw.quad(x0, top0, x1, top1, x0, bot0, x1, bot1, col0, col1, col0, col1);
+
+    const cR = (cR0 + cR1) >> 1;
+    const cG = (cG0 + cG1) >> 1;
+    const cB = (cB0 + cB1) >> 1;
     if (h0 < 16 && h1 < 16) return;
 
     const cornH0 = Math.max(2, (h0 * 0.08) | 0);
