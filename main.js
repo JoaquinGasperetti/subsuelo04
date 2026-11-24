@@ -1041,6 +1041,165 @@ let hwStalkerIsGltf = false;
 let hwStalkerSource = "NONE";
 
 // ============================================================================
+// ANIMACION PROCEDURAL DEL ACECHADOR 3D (0 allocs/frame, LUT Float64, NTSC/PAL)
+// ============================================================================
+const STALKER_SIN_SIZE = 256;
+const STALKER_SIN_MASK = 255;
+const STALKER_TWO_PI = toF64(6.283185307179586);
+const STALKER_RAD_TO_LUT = toF64(STALKER_SIN_SIZE / 6.283185307179586);
+const STALKER_SIN_LUT = new Float64Array(STALKER_SIN_SIZE);
+for (let i = 0; i < STALKER_SIN_SIZE; i++) {
+    STALKER_SIN_LUT[i] = toF64(Math.sin((i * 6.283185307179586) / STALKER_SIN_SIZE));
+}
+
+function resetStalkerAnim(inst, x, y) {
+    if (!inst) return;
+    inst.animPhase = toF64(0.0);
+    inst.animSpasmPhase = toF64(0.0);
+    inst.animPrevX = toF64(x);
+    inst.animPrevY = toF64(y);
+    inst.animSpeed = toF64(0.0);
+    inst.animYaw = toF64(0.0);
+    inst.animYawInit = false;
+    inst.animOutY = toF64(0.0);
+    inst.animOutRx = toF64(0.0);
+    inst.animOutRy = toF64(0.0);
+    inst.animOutRz = toF64(0.0);
+}
+
+// Actualiza fase, orientacion suave (arco mas corto) y pose procedural por instancia
+function updateStalkerAnim(inst, lookX, lookY, dtScale, hasLos, isBlinded) {
+    if (!inst) return;
+    const sx = toF64(inst.x);
+    const sy = toF64(inst.y);
+
+    const dt = clampF64(dtScale, 0.5, 2.0);
+    const dx = sx - toF64(inst.animPrevX);
+    const dy = sy - toF64(inst.animPrevY);
+    inst.animPrevX = sx;
+    inst.animPrevY = sy;
+
+    const distSq = fadd(dx * dx, dy * dy);
+    let moveDist = toF64(0.0);
+    let moved = false;
+
+    // Salto > 0.5 celdas en 1 cuadro = spawn o teletransporte (no interpretar como velocidad)
+    if ((distSq - 0.25) > 0) {
+        inst.animSpeed = toF64(0.0);
+        inst.animYawInit = false;
+    } else if ((distSq - 0.00000001) > 0) {
+        moveDist = toF64(Math.sqrt(distSq));
+        moved = true;
+    }
+
+    // Velocidad real normalizada a 60Hz (celdas por cuadro equivalente)
+    const instSpeed = moveDist / dt;
+    const speedAlpha = clampF64(0.22 * dt, 0.0, 1.0);
+    const smoothSpeed = fadd(toF64(inst.animSpeed), (instSpeed - toF64(inst.animSpeed)) * speedAlpha);
+    inst.animSpeed = smoothSpeed;
+
+    // Perfil de movimiento segun estado de IA (default: AI_PATROL lento y pesado)
+    let bobAmp = toF64(0.048);
+    let rollAmp = toF64(0.056);
+    let pitchBase = toF64(0.040);
+    let pitchAmp = toF64(0.020);
+    let freqScale = toF64(8.2);
+    let turnRate = toF64(0.10);
+
+    const st = inst.state;
+    if (st === AI_INVESTIGATE) {
+        bobAmp = toF64(0.032);
+        rollAmp = toF64(0.036);
+        pitchBase = toF64(0.065);
+        pitchAmp = toF64(0.018);
+        freqScale = toF64(9.0);
+        turnRate = toF64(0.13);
+    } else if (st === AI_CHASE_INTRO) {
+        bobAmp = toF64(0.028);
+        rollAmp = toF64(0.042);
+        pitchBase = toF64(0.095);
+        pitchAmp = toF64(0.024);
+        freqScale = toF64(9.6);
+        turnRate = toF64(0.18);
+    } else if (st === AI_HUNT) {
+        bobAmp = toF64(0.075);
+        rollAmp = toF64(0.078);
+        pitchBase = toF64(0.165);
+        pitchAmp = toF64(0.045);
+        freqScale = toF64(11.2);
+        turnRate = toF64(0.22);
+    }
+
+    // Orientacion: gira hacia su movimiento y solo encara al jugador si lo caza o lo ve
+    const facePlayer = (st === AI_HUNT) || (st === AI_CHASE_INTRO) || !!hasLos;
+    let targetYaw = toF64(inst.animYaw);
+    let hasTargetYaw = false;
+    if (facePlayer) {
+        targetYaw = toF64(Math.atan2(toF64(lookX) - sx, toF64(lookY) - sy));
+        hasTargetYaw = true;
+    } else if (moved) {
+        targetYaw = toF64(Math.atan2(dx, dy));
+        hasTargetYaw = true;
+    } else if (!inst.animYawInit) {
+        targetYaw = toF64(Math.atan2(toF64(lookX) - sx, toF64(lookY) - sy));
+        hasTargetYaw = true;
+    }
+
+    if (hasTargetYaw) {
+        if (!inst.animYawInit) {
+            inst.animYaw = targetYaw;
+            inst.animYawInit = true;
+        } else {
+            inst.animYaw = cinLerpAngle(inst.animYaw, targetYaw, clampF64(turnRate * dt, 0.0, 1.0));
+        }
+    }
+
+    let targetY = toF64(0.0);
+    let targetRx = pitchBase;
+    let targetRz = toF64(0.0);
+    let yawJitter = toF64(0.0);
+
+    if (isBlinded) {
+        // Frenado por linterna: espasmos cortos y retroceso leve usando 2 armonicos de la LUT
+        let spPhase = fadd(toF64(inst.animSpasmPhase), 0.62 * dt);
+        if ((spPhase - STALKER_TWO_PI) >= 0) spPhase = spPhase - STALKER_TWO_PI;
+        inst.animSpasmPhase = spPhase;
+
+        const spIdx = ((spPhase * STALKER_RAD_TO_LUT) | 0) & STALKER_SIN_MASK;
+        const sp1 = STALKER_SIN_LUT[spIdx];
+        const sp2 = STALKER_SIN_LUT[((spIdx * 3) + 41) & STALKER_SIN_MASK];
+        const jerk = sp1 * sp2;
+
+        targetY = (sp1 * sp1) * 0.018;
+        targetRx = fadd(-0.070, sp2 * 0.075);
+        targetRz = fadd(sp1 * 0.065, jerk * 0.060);
+        yawJitter = sp2 * 0.070;
+    } else {
+        const moveAmp = clampF64(smoothSpeed / 0.014, 0.0, 1.15);
+        if ((moveAmp - 0.02) > 0) {
+            let phase = fadd(toF64(inst.animPhase), fadd(0.030, smoothSpeed * freqScale) * dt);
+            if ((phase - STALKER_TWO_PI) >= 0) phase = phase - STALKER_TWO_PI;
+            inst.animPhase = phase;
+        }
+
+        const idx = ((toF64(inst.animPhase) * STALKER_RAD_TO_LUT) | 0) & STALKER_SIN_MASK;
+        const s = STALKER_SIN_LUT[idx];
+        const c = STALKER_SIN_LUT[(idx + 64) & STALKER_SIN_MASK];
+
+        // s*s mantiene Y >= 0 (2 apoyos suaves por zancada sin hundir los pies en el piso)
+        targetY = (s * s) * bobAmp * moveAmp;
+        targetRx = fadd(pitchBase, c * pitchAmp * moveAmp);
+        targetRz = s * rollAmp * moveAmp;
+    }
+
+    const poseAlpha = clampF64((isBlinded ? 0.55 : 0.25) * dt, 0.0, 1.0);
+    inst.animOutY  = fadd(toF64(inst.animOutY),  (targetY  - toF64(inst.animOutY))  * poseAlpha);
+    inst.animOutRx = fadd(toF64(inst.animOutRx), (targetRx - toF64(inst.animOutRx)) * poseAlpha);
+    inst.animOutRz = fadd(toF64(inst.animOutRz), (targetRz - toF64(inst.animOutRz)) * poseAlpha);
+    inst.animOutRy = fadd(toF64(inst.animYaw), yawJitter);
+}
+
+// ============================================================================
 // ARRANQUE RAPIDO (SOLO AUDIO) + STREAMING 3D PROGRESIVO (TITULO Y PARTIDA)
 // AthenaEnv moderno inicializa el VU1 con Render.init() y abre cada cuadro 3D
 // con Render.begin(); el modo 3D requiere esta API y el pase RenderObject.render().
@@ -1069,6 +1228,7 @@ let hwStreamCooldown = 4;
 let hwStreamDone = false;
 let hwStreamFailed = false;
 let hwLoadErrorMsg = "";
+let hwDrawFailed = false;
 let mapLoadPhase = 0;
 
 const HW3D_STREAM_STEPS = [
@@ -1107,12 +1267,14 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         let tex = null;
         if (texPath && fileExistsSafe(texPath)) {
             tex = new Image(texPath);
+            hkFixProto(tex, Image);
             if (tex && typeof tex.optimize === "function") {
                 try { tex.optimize(); } catch (_) {}
             }
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
         if (!data) return null;
+        hkFixProto(data, RenderData);
         // El recorte preciso se ejecuta en el VU1 antes de enviar triángulos fuera
         // del volumen visible al GS. Reservarlo para paredes/rejas/salida mantiene
         // piso, techo y modelos pequeños en el camino rápido, sin crear meshes nuevos.
@@ -1123,6 +1285,7 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         } catch (_) {}
         const obj = new RenderObject(data);
         if (obj) {
+            hkFixProto(obj, RenderObject);
             // Retener la textura solo después de crear el objeto: si falla la
             // carga, no dejamos imágenes/meshes huérfanos vivos hasta el final.
             if (tex) hwKeptTextures.push(tex);
@@ -1138,7 +1301,8 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
 
 function drawHwObject(obj, x, y, z, rx, ry, rz) {
     if (!obj) return;
-    if (typeof obj.render === "function") {
+    const useRender = (typeof obj.render === "function");
+    if (useRender || typeof obj.draw === "function") {
         hwDrawPosition.x = x;
         hwDrawPosition.y = y;
         hwDrawPosition.z = z;
@@ -1147,10 +1311,17 @@ function drawHwObject(obj, x, y, z, rx, ry, rz) {
         hwDrawRotation.z = rz;
         obj.position = hwDrawPosition;
         obj.rotation = hwDrawRotation;
-        obj.render();
+        if (useRender) obj.render(); else obj.draw();
         return;
     }
-    throw new Error("RenderObject sin render() de VU1");
+    if (!hwDrawFailed) {
+        hwDrawFailed = true;
+        hwLoadErrorMsg = "RenderObject sin render()/draw()";
+        hwDiagLines = [];
+        try { diagAdd(hwDiagLines, "obj: typeof=" + typeof obj + " ctor=" + ((obj.constructor && obj.constructor.name) || "?") + " proto===RenderObject.prototype:" + (Object.getPrototypeOf(obj) === RenderObject.prototype)); } catch (e) { hwDiagLines.push("obj ERR " + e); }
+        try { diagAdd(hwDiagLines, "obj own: " + diagNames(obj)); } catch (e) { hwDiagLines.push("own ERR " + e); }
+        try { diagAdd(hwDiagLines, "obj proto: " + diagNames(Object.getPrototypeOf(obj))); } catch (e) { hwDiagLines.push("oproto ERR " + e); }
+    }
 }
 
 function loadHwStalker(objPath, texPath) {
@@ -1287,7 +1458,8 @@ function tickProgressive3DStream() {
             if (typeof Render === "undefined" || typeof Render.init !== "function" ||
                 typeof Render.begin !== "function" || typeof Render.setView !== "function" ||
                 typeof RenderData !== "function" || typeof RenderObject !== "function" ||
-                !RenderObject.prototype || typeof RenderObject.prototype.render !== "function" ||
+                !RenderObject.prototype ||
+                (typeof RenderObject.prototype.render !== "function" && typeof RenderObject.prototype.draw !== "function") ||
                 typeof Camera === "undefined" ||
                 typeof Image !== "function" || !fileExistsSafe("assets/models/map_floor.obj")) {
                 hwLoadErrorMsg = "AthenaEnv sin API VU1 moderna";
@@ -1603,8 +1775,11 @@ function renderHardware3DWorld(
             if ((sdxC * sdxC + sdyC * sdyC) <= 225.0) {
                 const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
                 const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
-                const faceAng = Math.atan2(camX - sx, camZ - sz);
-                drawHwObject(hwStalkerObj, sx, 0.0, sz, 0.0, faceAng, 0.0);
+                drawHwObject(
+                    hwStalkerObj,
+                    sx, stalker.animOutY, sz,
+                    stalker.animOutRx, stalker.animOutRy, stalker.animOutRz
+                );
             }
         }
     } finally {
@@ -1640,12 +1815,20 @@ function render3DWorld(
     mapAnim = 0.0, sideBias = 0.0
 ) {
     if (hw3dReady && GAME_SETTINGS.qualityIndex === 0 && (gameState === STATE_PLAY || gameState === STATE_CINEMATIC)) {
-        renderHardware3DWorld(
-            screenW, screenH, player, stalker, entities,
-            dangerRatio, frameTick, exitUnlocked, flashIntensity, mapAnim, sideBias
-        );
+        hwDrawFailed = false;
+        try {
+            renderHardware3DWorld(
+                screenW, screenH, player, stalker, entities,
+                dangerRatio, frameTick, exitUnlocked, flashIntensity, mapAnim, sideBias
+            );
+        } catch (e) {
+            hwDrawFailed = true;
+            hwLoadErrorMsg = e ? String(e) : "Error render 3D";
+        }
         restore2DRenderState(screenW, screenH);
-        return;
+        if (!hwDrawFailed) return;
+        hw3dReady = false;
+        hwStreamFailed = true;
     }
     const qIdx = (gameState === STATE_PLAY || gameState === STATE_CINEMATIC) ? GAME_SETTINGS.qualityIndex : 2;
     const qTable = QUALITY_TABLES[qIdx] || QUALITY_TABLES[1];
@@ -3040,7 +3223,18 @@ const cinStalker = {
     wpIdx: 0,
     hasNextNode: false,
     nextNodeX: toF64(10.0),
-    nextNodeY: toF64(10.0)
+    nextNodeY: toF64(10.0),
+    animPhase: toF64(0.0),
+    animSpasmPhase: toF64(0.0),
+    animPrevX: toF64(99.0),
+    animPrevY: toF64(99.0),
+    animSpeed: toF64(0.0),
+    animYaw: toF64(0.0),
+    animYawInit: false,
+    animOutY: toF64(0.0),
+    animOutRx: toF64(0.0),
+    animOutRy: toF64(0.0),
+    animOutRz: toF64(0.0)
 };
 
 const cinState = {
@@ -3162,6 +3356,8 @@ function startCinematic(sequence, onFinishState) {
     // Ocultar Acechador fuera del radio de culling hasta que la timeline lo invoque
     cinStalker.x = toF64(99.0);
     cinStalker.y = toF64(99.0);
+    cinStalker.state = AI_PATROL;
+    resetStalkerAnim(cinStalker, 99.0, 99.0);
 
     // Forzar refresco de iluminación 3D al cambiar a cinemática
     hwLastFlashState = -1;
@@ -3322,6 +3518,7 @@ function cinEvalEntities(seq, tMs) {
     if (!stalkerVisible) {
         cinStalker.x = toF64(99.0);
         cinStalker.y = toF64(99.0);
+        cinStalker.animYawInit = false;
     }
 }
 
@@ -3548,6 +3745,7 @@ function updateAndRenderCinematic(screenW, screenH, dtMs, dtScale, frameTick, pa
     cinEvalVhs(seq, tMs);
     cinEvalCamera(seq, tMs, frameTick);
     cinEvalEntities(seq, tMs);
+    updateStalkerAnim(cinStalker, cinCamera.x, cinCamera.y, dtScale, false, false);
     cinEvalFade(seq, tMs);
     cinEvalAudioCues(seq, tMs);
     cinEvalSubtitles(seq, tMs);
@@ -3743,8 +3941,92 @@ const pad = Pads.get(0);
 // Logo de arranque HK Entertainment (reemplaza el boot logo nativo de AthenaEnv)
 let hkLogoImg = null;
 let hkLogoAttempted = false;
+let hkLogoErr = "";
+let hkLogoDrawFailed = false;
 let splashTick = 0;
-const SPLASH_DURATION = 135; // ~2.25s a 60Hz
+// DIAGNOSTICO DE RUNTIME: muestra en pantalla que API expone AthenaEnv. Poner en false para quitarlo.
+const HK_DIAG_SCREEN = true;
+
+// Algunos objetos nativos (Image, RenderData, RenderObject) llegan SIN prototipo en este runtime
+// (Object.getPrototypeOf(obj) === null), por eso no tienen draw()/render()/setters. Se les
+// reconecta el prototipo de su clase justo despues de crearlos y antes de asignar propiedades.
+let hkProtoFixed = 0;
+let hkProtoFixFailed = 0;
+function hkFixProto(obj, Cls) {
+    if (!obj) return obj;
+    try {
+        if (typeof Cls === "function" && Cls.prototype && Object.getPrototypeOf(obj) !== Cls.prototype) {
+            Object.setPrototypeOf(obj, Cls.prototype);
+            if (Object.getPrototypeOf(obj) === Cls.prototype) hkProtoFixed++; else hkProtoFixFailed++;
+        }
+    } catch (_) {
+        hkProtoFixFailed++;
+    }
+    return obj;
+}
+let hkDiagLines = null;
+let hwDiagLines = null;
+let hwDiagShow = 0;
+const SPLASH_DURATION = HK_DIAG_SCREEN ? 600 : 135; // ~2.25s a 60Hz (10s con diagnostico)
+
+function diagNames(o) {
+    try { return Object.getOwnPropertyNames(o).join(","); } catch (e) { return "ERR " + e; }
+}
+
+function diagAdd(list, text) {
+    const t = String(text);
+    for (let i = 0; i < t.length; i += 78) list.push(t.slice(i, i + 78));
+}
+
+function buildHkDiag() {
+    const L = [];
+    try { diagAdd(L, "tipos: Image=" + typeof Image + " RenderObject=" + typeof RenderObject + " RenderData=" + typeof RenderData + " Render=" + typeof Render + " Draw=" + typeof Draw); } catch (e) { diagAdd(L, "E1 " + e); }
+    try { diagAdd(L, "Render.init=" + typeof Render.init + " begin=" + typeof Render.begin + " setView=" + typeof Render.setView + " Camera=" + typeof Camera + " Lights=" + typeof Lights); } catch (e) { diagAdd(L, "E2 " + e); }
+    try { diagAdd(L, "Image.prototype: " + diagNames(Image.prototype)); } catch (e) { diagAdd(L, "E3 " + e); }
+    try { diagAdd(L, "RenderObject.prototype: " + diagNames(RenderObject.prototype)); } catch (e) { diagAdd(L, "E4 " + e); }
+    try { diagAdd(L, "Render: " + diagNames(Render)); } catch (e) { diagAdd(L, "E5 " + e); }
+    try { diagAdd(L, "Draw: " + diagNames(Draw)); } catch (e) { diagAdd(L, "E6 " + e); }
+    try {
+        if (hkLogoImg) {
+            diagAdd(L, "logo: typeof=" + typeof hkLogoImg + " ctor=" + ((hkLogoImg.constructor && hkLogoImg.constructor.name) || "?") + " draw=" + typeof hkLogoImg.draw + " proto===Image.prototype:" + (Object.getPrototypeOf(hkLogoImg) === Image.prototype));
+            diagAdd(L, "logo own: " + diagNames(hkLogoImg));
+            diagAdd(L, "logo proto: " + diagNames(Object.getPrototypeOf(hkLogoImg)));
+        } else {
+            diagAdd(L, "logo: NO CARGADO " + (hkLogoErr || "(sin error; existe=" + fileExistsSafe("assets/textures/hk_logo.png") + ")"));
+        }
+    } catch (e) { diagAdd(L, "E7 " + e); }
+    diagAdd(L, "protoFix: aplicados=" + hkProtoFixed + " fallidos=" + hkProtoFixFailed);
+    if (hkLogoErr) diagAdd(L, "logo err: " + hkLogoErr);
+    return L.slice(0, 30);
+}
+
+function drawHkDiagOverlay() {
+    if (!HK_DIAG_SCREEN || !fnt) return;
+    let lines = null;
+    let title = "";
+    if (gameState === STATE_SPLASH) {
+        if (!hkDiagLines && hkLogoAttempted) hkDiagLines = buildHkDiag();
+        if (hkLogoDrawFailed && hkLogoErr && hkDiagLines && hkDiagLines.indexOf("logo err: " + hkLogoErr) < 0) hkDiagLines.push("logo err: " + hkLogoErr);
+        lines = hkDiagLines;
+        title = "DIAGNOSTICO RUNTIME (foto de esta pantalla)";
+    } else if (hwDiagLines || hwStreamFailed) {
+        if (hwDiagShow > 1500) return;
+        hwDiagShow++;
+        const L = [];
+        diagAdd(L, "3D FALLO: " + String(hwLoadErrorMsg || "?") + " | protoFix ok=" + hkProtoFixed + " fail=" + hkProtoFixFailed);
+        if (hwDiagLines) for (let i = 0; i < hwDiagLines.length; i++) diagAdd(L, hwDiagLines[i]);
+        lines = L.slice(0, 30);
+        title = "DIAGNOSTICO 3D (foto de esta pantalla)";
+    }
+    if (!lines || lines.length === 0) return;
+    const h = 18 + lines.length * 13;
+    Draw.rect(0, 0, SCREEN_W, h + 4, rgba(0, 0, 0, 110));
+    fnt.scale = Math.fround(0.40);
+    fnt.color = rgba(120, 255, 140, 128);
+    fnt.print(8, 4, title);
+    fnt.color = rgba(235, 235, 235, 128);
+    for (let i = 0; i < lines.length; i++) fnt.print(8, 18 + i * 13, lines[i]);
+}
 
 function freeHkLogo() {
     if (hkLogoImg) {
@@ -3762,14 +4044,16 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
         try {
             if (typeof Image === "function" && fileExistsSafe("assets/textures/hk_logo.png")) {
                 hkLogoImg = new Image("assets/textures/hk_logo.png");
+                hkFixProto(hkLogoImg, Image);
                 if (hkLogoImg) {
                     if (typeof LINEAR !== "undefined") hkLogoImg.filter = LINEAR;
                     hkLogoImg.width = 216;
                     hkLogoImg.height = 216;
                 }
             }
-        } catch (_) {
+        } catch (e) {
             hkLogoImg = null;
+            hkLogoErr = e ? String(e) : "error carga logo";
         }
     }
 
@@ -3785,8 +4069,18 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
     if (hkLogoImg) {
         const lx = (screenW - 216) >> 1;
         const ly = ((screenH - 216) >> 1) - 18;
-        hkLogoImg.color = rgba(255, 255, 255, alpha);
-        hkLogoImg.draw(lx, ly);
+        try {
+            hkLogoImg.color = rgba(255, 255, 255, alpha);
+            hkLogoImg.draw(lx, ly);
+        } catch (e) {
+            hkLogoErr = e ? String(e) : "error dibujo logo";
+            hkLogoDrawFailed = true;
+        }
+    }
+    if (!hkLogoImg || hkLogoDrawFailed) {
+        fnt.scale = Math.fround(1.10);
+        fnt.color = rgba(245, 210, 120, alpha);
+        fnt.print((screenW >> 1) - 150, (screenH >> 1) - 30, "HK ENTERTAINMENT");
     }
 
     fnt.scale = Math.fround(0.80);
@@ -3891,7 +4185,18 @@ const stalker = {
     wpIdx: 0,
     hasNextNode: false,
     nextNodeX: toF64(10.0),
-    nextNodeY: toF64(10.0)
+    nextNodeY: toF64(10.0),
+    animPhase: toF64(0.0),
+    animSpasmPhase: toF64(0.0),
+    animPrevX: toF64(10.0),
+    animPrevY: toF64(15.5),
+    animSpeed: toF64(0.0),
+    animYaw: toF64(0.0),
+    animYawInit: false,
+    animOutY: toF64(0.0),
+    animOutRx: toF64(0.0),
+    animOutRy: toF64(0.0),
+    animOutRz: toF64(0.0)
 };
 
 let entities = [];
@@ -4042,6 +4347,7 @@ function resetGame() {
     stalker.chaseIntroMs = 0.0;
     stalker.wpIdx = 0;
     stalker.hasNextNode = false;
+    resetStalkerAnim(stalker, stalker.x, stalker.y);
 
     entities = [
         { kind: "fuse", x: toF64(10.0), y: toF64(17.5), taken: false },
@@ -4069,7 +4375,7 @@ function resetGame() {
 resetGame();
 
 let runtimeErr = null;
-Screen.display(() => {
+const hkFrameBody = () => {
     if (runtimeErr !== null) {
         Draw.rect(0, 0, SCREEN_W, SCREEN_H, rgba(55, 0, 0, 128));
         fnt.scale = Math.fround(0.76);
@@ -4481,6 +4787,7 @@ Screen.display(() => {
             }
 
             const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty, dtMs);
+            updateStalkerAnim(stalker, player.x, player.y, dtScale, ai.los, ai.blinded);
             const dangerRatio = toF64(Math.max(0.0, Math.min(1.0, (7.0 - toF64(ai.distP)) / 7.0)));
 
             if (ai.chaseIntroStarted) {
@@ -4754,4 +5061,8 @@ Screen.display(() => {
     } catch (e) {
         runtimeErr = String(e) + " | " + String(e && e.stack ? e.stack : "").replace(/\n/g, " ");
     }
+};
+Screen.display(() => {
+    hkFrameBody();
+    if (runtimeErr === null) { try { drawHkDiagOverlay(); } catch (_) {} }
 });
