@@ -32,9 +32,7 @@ const GAME_SETTINGS = {
 // Mostrar panel de diagnostico de rendimiento
     showFps: false,
     // Dificultad: 0 = NORMAL, 1 = PESADILLA
-    difficulty: 0,
-    // Animacion procedural del Acechador en modo 3D VU1
-    stalkerAnim: true
+    difficulty: 0
 };
 
 const QUALITY_RAYS = [128, 96, 64];
@@ -233,7 +231,6 @@ function loadSaveData() {
             if (typeof data.difficulty === "number" && (data.difficulty === 0 || data.difficulty === 1)) {
                 GAME_SETTINGS.difficulty = data.difficulty | 0;
             }
-            if (typeof data.stalkerAnim === "boolean") GAME_SETTINGS.stalkerAnim = data.stalkerAnim;
             if (typeof data.bestNormalSec === "number" && data.bestNormalSec > 0) {
                 RECORDS.bestNormalSec = data.bestNormalSec | 0;
             }
@@ -266,7 +263,6 @@ function saveGameData() {
             audioVolume: GAME_SETTINGS.audioVolume,
             showFps: GAME_SETTINGS.showFps,
             difficulty: GAME_SETTINGS.difficulty,
-            stalkerAnim: GAME_SETTINGS.stalkerAnim,
             bestNormalSec: RECORDS.bestNormalSec,
             bestNightmareSec: RECORDS.bestNightmareSec,
             escapes: RECORDS.escapes
@@ -1077,13 +1073,6 @@ function updateStalkerAnim(inst, lookX, lookY, dtScale, hasLos, isBlinded) {
     const sx = toF64(inst.x);
     const sy = toF64(inst.y);
 
-    if (!GAME_SETTINGS.stalkerAnim) {
-        inst.animPrevX = sx;
-        inst.animPrevY = sy;
-        inst.animYawInit = false;
-        return;
-    }
-
     const dt = clampF64(dtScale, 0.5, 2.0);
     const dx = sx - toF64(inst.animPrevX);
     const dy = sy - toF64(inst.animPrevY);
@@ -1239,8 +1228,6 @@ let hwStreamCooldown = 4;
 let hwStreamDone = false;
 let hwStreamFailed = false;
 let hwLoadErrorMsg = "";
-// Fallo de dibujo 3D detectado en caliente: en vez de cerrar el juego con pantalla de error,
-// se desactiva el modo 3D VU1 y se cae al raycaster 2.5D, dejando el motivo en hwLoadErrorMsg.
 let hwDrawFailed = false;
 let mapLoadPhase = 0;
 
@@ -1280,12 +1267,14 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         let tex = null;
         if (texPath && fileExistsSafe(texPath)) {
             tex = new Image(texPath);
+            hkFixProto(tex, Image);
             if (tex && typeof tex.optimize === "function") {
                 try { tex.optimize(); } catch (_) {}
             }
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
         if (!data) return null;
+        hkFixProto(data, RenderData);
         // El recorte preciso se ejecuta en el VU1 antes de enviar triángulos fuera
         // del volumen visible al GS. Reservarlo para paredes/rejas/salida mantiene
         // piso, techo y modelos pequeños en el camino rápido, sin crear meshes nuevos.
@@ -1296,6 +1285,7 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
         } catch (_) {}
         const obj = new RenderObject(data);
         if (obj) {
+            hkFixProto(obj, RenderObject);
             // Retener la textura solo después de crear el objeto: si falla la
             // carga, no dejamos imágenes/meshes huérfanos vivos hasta el final.
             if (tex) hwKeptTextures.push(tex);
@@ -1324,18 +1314,13 @@ function drawHwObject(obj, x, y, z, rx, ry, rz) {
         if (useRender) obj.render(); else obj.draw();
         return;
     }
-    // Sin render()/draw(): no lanzar (evita la pantalla de error en tiempo de ejecucion).
-    // Se marca el fallo, render3DWorld cae al modo 2.5D y la pantalla de diagnostico
-    // muestra que expone realmente el objeto.
     if (!hwDrawFailed) {
         hwDrawFailed = true;
         hwLoadErrorMsg = "RenderObject sin render()/draw()";
         hwDiagLines = [];
-        try { hwDiagLines.push("typeof obj: " + typeof obj + " | ctor: " + ((obj.constructor && obj.constructor.name) || "?")); } catch (e) { hwDiagLines.push("obj ERR " + e); }
-        try { hwDiagLines.push("proto===RenderObject.prototype: " + (Object.getPrototypeOf(obj) === RenderObject.prototype)); } catch (e) { hwDiagLines.push("proto ERR " + e); }
-        try { hwDiagLines.push("obj own: " + Object.getOwnPropertyNames(obj).join(",")); } catch (e) { hwDiagLines.push("own ERR " + e); }
-        try { hwDiagLines.push("obj proto: " + Object.getOwnPropertyNames(Object.getPrototypeOf(obj)).join(",")); } catch (e) { hwDiagLines.push("oproto ERR " + e); }
-        try { hwDiagLines.push("RenderObject.prototype: " + Object.getOwnPropertyNames(RenderObject.prototype).join(",")); } catch (e) { hwDiagLines.push("RO ERR " + e); }
+        try { diagAdd(hwDiagLines, "obj: typeof=" + typeof obj + " ctor=" + ((obj.constructor && obj.constructor.name) || "?") + " proto===RenderObject.prototype:" + (Object.getPrototypeOf(obj) === RenderObject.prototype)); } catch (e) { hwDiagLines.push("obj ERR " + e); }
+        try { diagAdd(hwDiagLines, "obj own: " + diagNames(obj)); } catch (e) { hwDiagLines.push("own ERR " + e); }
+        try { diagAdd(hwDiagLines, "obj proto: " + diagNames(Object.getPrototypeOf(obj))); } catch (e) { hwDiagLines.push("oproto ERR " + e); }
     }
 }
 
@@ -1790,16 +1775,11 @@ function renderHardware3DWorld(
             if ((sdxC * sdxC + sdyC * sdyC) <= 225.0) {
                 const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
                 const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
-                if (GAME_SETTINGS.stalkerAnim) {
-                    drawHwObject(
-                        hwStalkerObj,
-                        sx, stalker.animOutY, sz,
-                        stalker.animOutRx, stalker.animOutRy, stalker.animOutRz
-                    );
-                } else {
-                    const faceAng = Math.atan2(camX - sx, camZ - sz);
-                    drawHwObject(hwStalkerObj, sx, 0.0, sz, 0.0, faceAng, 0.0);
-                }
+                drawHwObject(
+                    hwStalkerObj,
+                    sx, stalker.animOutY, sz,
+                    stalker.animOutRx, stalker.animOutRy, stalker.animOutRz
+                );
             }
         }
     } finally {
@@ -1847,7 +1827,6 @@ function render3DWorld(
         }
         restore2DRenderState(screenW, screenH);
         if (!hwDrawFailed) return;
-        // Caer a 2.5D de forma permanente para no reintentar cada cuadro
         hw3dReady = false;
         hwStreamFailed = true;
     }
@@ -2844,26 +2823,25 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         ? "ERROR VU1"
         : QUALITY_LABELS[GAME_SETTINGS.qualityIndex];
     const rows = [
-        { label: "MOTOR GRAFICO",    val: qualityLabel },
-        { label: "ASPECTO TV",       val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
-        { label: "MARGEN CRT",       val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
-        { label: "SENSIBILIDAD",     val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
-        { label: "VIBRACION",        val: GAME_SETTINGS.rumble ? "SI" : "NO" },
-        { label: "EFECTOS VHS",      val: GAME_SETTINGS.overlays ? "SI" : "NO" },
-        { label: "AUDIO",            val: audioVal },
+        { label: "MOTOR GRAFICO",  val: qualityLabel },
+        { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
+        { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
+        { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
+        { label: "VIBRACION",      val: GAME_SETTINGS.rumble ? "SI" : "NO" },
+        { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
+        { label: "AUDIO",          val: audioVal },
         { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
-        { label: "ANIMACION 3D",     val: GAME_SETTINGS.stalkerAnim ? "SI" : "NO" },
-        { label: "GUARDAR",          val: "[X]" }
+        { label: "GUARDAR",        val: "[X]" }
     ];
 
-    const startY = py + 43;
-    const rowH = 30;
+    const startY = py + 44;
+    const rowH = 33;
     for (let i = 0; i < rows.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 14, ry - 3, panelW - 28, 27, COL_SEL_BG);
-            Draw.rect(px + 14, ry - 3, 5, 27, COL_SEL_BAR);
+            Draw.rect(px + 14, ry - 3, panelW - 28, 30, COL_SEL_BG);
+            Draw.rect(px + 14, ry - 3, 5, 30, COL_SEL_BAR);
         }
         fnt.scale = Math.fround(0.75);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
@@ -3964,13 +3942,32 @@ const pad = Pads.get(0);
 let hkLogoImg = null;
 let hkLogoAttempted = false;
 let hkLogoErr = "";
+let hkLogoDrawFailed = false;
 let splashTick = 0;
 // DIAGNOSTICO DE RUNTIME: muestra en pantalla que API expone AthenaEnv. Poner en false para quitarlo.
 const HK_DIAG_SCREEN = true;
+
+// Algunos objetos nativos (Image, RenderData, RenderObject) llegan SIN prototipo en este runtime
+// (Object.getPrototypeOf(obj) === null), por eso no tienen draw()/render()/setters. Se les
+// reconecta el prototipo de su clase justo despues de crearlos y antes de asignar propiedades.
+let hkProtoFixed = 0;
+let hkProtoFixFailed = 0;
+function hkFixProto(obj, Cls) {
+    if (!obj) return obj;
+    try {
+        if (typeof Cls === "function" && Cls.prototype && Object.getPrototypeOf(obj) !== Cls.prototype) {
+            Object.setPrototypeOf(obj, Cls.prototype);
+            if (Object.getPrototypeOf(obj) === Cls.prototype) hkProtoFixed++; else hkProtoFixFailed++;
+        }
+    } catch (_) {
+        hkProtoFixFailed++;
+    }
+    return obj;
+}
 let hkDiagLines = null;
 let hwDiagLines = null;
 let hwDiagShow = 0;
-const SPLASH_DURATION = HK_DIAG_SCREEN ? 480 : 135; // ~2.25s a 60Hz (8s con diagnostico)
+const SPLASH_DURATION = HK_DIAG_SCREEN ? 600 : 135; // ~2.25s a 60Hz (10s con diagnostico)
 
 function diagNames(o) {
     try { return Object.getOwnPropertyNames(o).join(","); } catch (e) { return "ERR " + e; }
@@ -3983,20 +3980,24 @@ function diagAdd(list, text) {
 
 function buildHkDiag() {
     const L = [];
-    try { diagAdd(L, "tipos: Image=" + typeof Image + " RenderObject=" + typeof RenderObject + " RenderData=" + typeof RenderData + " Render=" + typeof Render); } catch (e) { diagAdd(L, "E1 " + e); }
+    try { diagAdd(L, "tipos: Image=" + typeof Image + " RenderObject=" + typeof RenderObject + " RenderData=" + typeof RenderData + " Render=" + typeof Render + " Draw=" + typeof Draw); } catch (e) { diagAdd(L, "E1 " + e); }
     try { diagAdd(L, "Render.init=" + typeof Render.init + " begin=" + typeof Render.begin + " setView=" + typeof Render.setView + " Camera=" + typeof Camera + " Lights=" + typeof Lights); } catch (e) { diagAdd(L, "E2 " + e); }
     try { diagAdd(L, "Image.prototype: " + diagNames(Image.prototype)); } catch (e) { diagAdd(L, "E3 " + e); }
     try { diagAdd(L, "RenderObject.prototype: " + diagNames(RenderObject.prototype)); } catch (e) { diagAdd(L, "E4 " + e); }
+    try { diagAdd(L, "Render: " + diagNames(Render)); } catch (e) { diagAdd(L, "E5 " + e); }
+    try { diagAdd(L, "Draw: " + diagNames(Draw)); } catch (e) { diagAdd(L, "E6 " + e); }
     try {
         if (hkLogoImg) {
-            diagAdd(L, "logo: typeof draw=" + typeof hkLogoImg.draw + " proto===Image.prototype:" + (Object.getPrototypeOf(hkLogoImg) === Image.prototype));
+            diagAdd(L, "logo: typeof=" + typeof hkLogoImg + " ctor=" + ((hkLogoImg.constructor && hkLogoImg.constructor.name) || "?") + " draw=" + typeof hkLogoImg.draw + " proto===Image.prototype:" + (Object.getPrototypeOf(hkLogoImg) === Image.prototype));
             diagAdd(L, "logo own: " + diagNames(hkLogoImg));
+            diagAdd(L, "logo proto: " + diagNames(Object.getPrototypeOf(hkLogoImg)));
         } else {
-            diagAdd(L, "logo: NO CARGADO " + (hkLogoErr || "(sin error; fileExists=" + fileExistsSafe("assets/textures/hk_logo.png") + ")"));
+            diagAdd(L, "logo: NO CARGADO " + (hkLogoErr || "(sin error; existe=" + fileExistsSafe("assets/textures/hk_logo.png") + ")"));
         }
-    } catch (e) { diagAdd(L, "E5 " + e); }
-    try { diagAdd(L, "modelo: map_floor.obj existe=" + fileExistsSafe("assets/models/map_floor.obj") + " stalker.obj=" + fileExistsSafe("assets/models/stalker.obj")); } catch (e) { diagAdd(L, "E6 " + e); }
-    return L;
+    } catch (e) { diagAdd(L, "E7 " + e); }
+    diagAdd(L, "protoFix: aplicados=" + hkProtoFixed + " fallidos=" + hkProtoFixFailed);
+    if (hkLogoErr) diagAdd(L, "logo err: " + hkLogoErr);
+    return L.slice(0, 30);
 }
 
 function drawHkDiagOverlay() {
@@ -4005,15 +4006,16 @@ function drawHkDiagOverlay() {
     let title = "";
     if (gameState === STATE_SPLASH) {
         if (!hkDiagLines && hkLogoAttempted) hkDiagLines = buildHkDiag();
+        if (hkLogoDrawFailed && hkLogoErr && hkDiagLines && hkDiagLines.indexOf("logo err: " + hkLogoErr) < 0) hkDiagLines.push("logo err: " + hkLogoErr);
         lines = hkDiagLines;
         title = "DIAGNOSTICO RUNTIME (foto de esta pantalla)";
     } else if (hwDiagLines || hwStreamFailed) {
         if (hwDiagShow > 1500) return;
         hwDiagShow++;
         const L = [];
-        diagAdd(L, "3D FALLO: " + String(hwLoadErrorMsg || "?"));
+        diagAdd(L, "3D FALLO: " + String(hwLoadErrorMsg || "?") + " | protoFix ok=" + hkProtoFixed + " fail=" + hkProtoFixFailed);
         if (hwDiagLines) for (let i = 0; i < hwDiagLines.length; i++) diagAdd(L, hwDiagLines[i]);
-        lines = L;
+        lines = L.slice(0, 30);
         title = "DIAGNOSTICO 3D (foto de esta pantalla)";
     }
     if (!lines || lines.length === 0) return;
@@ -4042,6 +4044,7 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
         try {
             if (typeof Image === "function" && fileExistsSafe("assets/textures/hk_logo.png")) {
                 hkLogoImg = new Image("assets/textures/hk_logo.png");
+                hkFixProto(hkLogoImg, Image);
                 if (hkLogoImg) {
                     if (typeof LINEAR !== "undefined") hkLogoImg.filter = LINEAR;
                     hkLogoImg.width = 216;
@@ -4070,20 +4073,14 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
             hkLogoImg.color = rgba(255, 255, 255, alpha);
             hkLogoImg.draw(lx, ly);
         } catch (e) {
-            hkLogoImg = null;
             hkLogoErr = e ? String(e) : "error dibujo logo";
+            hkLogoDrawFailed = true;
         }
     }
-    if (!hkLogoImg) {
-        // Respaldo: si el logo no carga o no dibuja, mostrar el nombre del estudio y el motivo
+    if (!hkLogoImg || hkLogoDrawFailed) {
         fnt.scale = Math.fround(1.10);
         fnt.color = rgba(245, 210, 120, alpha);
         fnt.print((screenW >> 1) - 150, (screenH >> 1) - 30, "HK ENTERTAINMENT");
-        if (hkLogoErr) {
-            fnt.scale = Math.fround(0.45);
-            fnt.color = rgba(200, 80, 80, alpha);
-            fnt.print(24, screenH - 40, "LOGO: " + hkLogoErr);
-        }
     }
 
     fnt.scale = Math.fround(0.80);
@@ -4542,9 +4539,9 @@ const hkFrameBody = () => {
             drawOptionsMenu(SCREEN_W, SCREEN_H, optionsCursor, saveFeedbackTimer, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 10) % 10; playSfx("ui_move", 0, 0.7); }
+            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 9) % 9; playSfx("ui_move", 0, 0.7); }
 
-            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 9 ? 1 : 0);
+            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 8 ? 1 : 0);
             if (adjust !== 0) {
                 if (optionsCursor === 0) {
                     GAME_SETTINGS.qualityIndex = (GAME_SETTINGS.qualityIndex + adjust + 3) % 3;
@@ -4575,12 +4572,10 @@ const hkFrameBody = () => {
                 } else if (optionsCursor === 7) {
                     GAME_SETTINGS.showFps = !GAME_SETTINGS.showFps;
                     if (GAME_SETTINGS.showFps) ensureFpsCounter();
-                } else if (optionsCursor === 8) {
-                    GAME_SETTINGS.stalkerAnim = !GAME_SETTINGS.stalkerAnim;
                 }
             }
 
-            if (pad.justPressed(Pads.CROSS) && optionsCursor === 9) {
+            if (pad.justPressed(Pads.CROSS) && optionsCursor === 8) {
                 saveGameData();
                 saveFeedbackTimer = 90;
                 switchState(returnState);
