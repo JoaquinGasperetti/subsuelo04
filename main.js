@@ -1314,13 +1314,11 @@ function drawHwObject(obj, x, y, z, rx, ry, rz) {
         if (useRender) obj.render(); else obj.draw();
         return;
     }
+    // Sin render()/draw(): no lanzar. Se marca el fallo y render3DWorld cae al modo 2.5D
+    // (el motivo queda en hwLoadErrorMsg y se ve en R2).
     if (!hwDrawFailed) {
         hwDrawFailed = true;
         hwLoadErrorMsg = "RenderObject sin render()/draw()";
-        hwDiagLines = [];
-        try { diagAdd(hwDiagLines, "obj: typeof=" + typeof obj + " ctor=" + ((obj.constructor && obj.constructor.name) || "?") + " proto===RenderObject.prototype:" + (Object.getPrototypeOf(obj) === RenderObject.prototype)); } catch (e) { hwDiagLines.push("obj ERR " + e); }
-        try { diagAdd(hwDiagLines, "obj own: " + diagNames(obj)); } catch (e) { hwDiagLines.push("own ERR " + e); }
-        try { diagAdd(hwDiagLines, "obj proto: " + diagNames(Object.getPrototypeOf(obj))); } catch (e) { hwDiagLines.push("oproto ERR " + e); }
     }
 }
 
@@ -3941,92 +3939,23 @@ const pad = Pads.get(0);
 // Logo de arranque HK Entertainment (reemplaza el boot logo nativo de AthenaEnv)
 let hkLogoImg = null;
 let hkLogoAttempted = false;
-let hkLogoErr = "";
 let hkLogoDrawFailed = false;
 let splashTick = 0;
-// DIAGNOSTICO DE RUNTIME: muestra en pantalla que API expone AthenaEnv. Poner en false para quitarlo.
-const HK_DIAG_SCREEN = true;
-
 // Algunos objetos nativos (Image, RenderData, RenderObject) llegan SIN prototipo en este runtime
-// (Object.getPrototypeOf(obj) === null), por eso no tienen draw()/render()/setters. Se les
-// reconecta el prototipo de su clase justo despues de crearlos y antes de asignar propiedades.
-let hkProtoFixed = 0;
-let hkProtoFixFailed = 0;
+// (Object.getPrototypeOf(obj) === null), por lo que no tienen draw()/render() ni sus setters.
+// Se les reconecta el prototipo de su clase justo despues de crearlos y antes de asignar
+// propiedades. Si el objeto ya tiene su prototipo correcto, no hace nada.
 function hkFixProto(obj, Cls) {
     if (!obj) return obj;
     try {
         if (typeof Cls === "function" && Cls.prototype && Object.getPrototypeOf(obj) !== Cls.prototype) {
             Object.setPrototypeOf(obj, Cls.prototype);
-            if (Object.getPrototypeOf(obj) === Cls.prototype) hkProtoFixed++; else hkProtoFixFailed++;
         }
-    } catch (_) {
-        hkProtoFixFailed++;
-    }
+    } catch (_) {}
     return obj;
 }
-let hkDiagLines = null;
-let hwDiagLines = null;
-let hwDiagShow = 0;
-const SPLASH_DURATION = HK_DIAG_SCREEN ? 600 : 135; // ~2.25s a 60Hz (10s con diagnostico)
 
-function diagNames(o) {
-    try { return Object.getOwnPropertyNames(o).join(","); } catch (e) { return "ERR " + e; }
-}
-
-function diagAdd(list, text) {
-    const t = String(text);
-    for (let i = 0; i < t.length; i += 78) list.push(t.slice(i, i + 78));
-}
-
-function buildHkDiag() {
-    const L = [];
-    try { diagAdd(L, "tipos: Image=" + typeof Image + " RenderObject=" + typeof RenderObject + " RenderData=" + typeof RenderData + " Render=" + typeof Render + " Draw=" + typeof Draw); } catch (e) { diagAdd(L, "E1 " + e); }
-    try { diagAdd(L, "Render.init=" + typeof Render.init + " begin=" + typeof Render.begin + " setView=" + typeof Render.setView + " Camera=" + typeof Camera + " Lights=" + typeof Lights); } catch (e) { diagAdd(L, "E2 " + e); }
-    try { diagAdd(L, "Image.prototype: " + diagNames(Image.prototype)); } catch (e) { diagAdd(L, "E3 " + e); }
-    try { diagAdd(L, "RenderObject.prototype: " + diagNames(RenderObject.prototype)); } catch (e) { diagAdd(L, "E4 " + e); }
-    try { diagAdd(L, "Render: " + diagNames(Render)); } catch (e) { diagAdd(L, "E5 " + e); }
-    try { diagAdd(L, "Draw: " + diagNames(Draw)); } catch (e) { diagAdd(L, "E6 " + e); }
-    try {
-        if (hkLogoImg) {
-            diagAdd(L, "logo: typeof=" + typeof hkLogoImg + " ctor=" + ((hkLogoImg.constructor && hkLogoImg.constructor.name) || "?") + " draw=" + typeof hkLogoImg.draw + " proto===Image.prototype:" + (Object.getPrototypeOf(hkLogoImg) === Image.prototype));
-            diagAdd(L, "logo own: " + diagNames(hkLogoImg));
-            diagAdd(L, "logo proto: " + diagNames(Object.getPrototypeOf(hkLogoImg)));
-        } else {
-            diagAdd(L, "logo: NO CARGADO " + (hkLogoErr || "(sin error; existe=" + fileExistsSafe("assets/textures/hk_logo.png") + ")"));
-        }
-    } catch (e) { diagAdd(L, "E7 " + e); }
-    diagAdd(L, "protoFix: aplicados=" + hkProtoFixed + " fallidos=" + hkProtoFixFailed);
-    if (hkLogoErr) diagAdd(L, "logo err: " + hkLogoErr);
-    return L.slice(0, 30);
-}
-
-function drawHkDiagOverlay() {
-    if (!HK_DIAG_SCREEN || !fnt) return;
-    let lines = null;
-    let title = "";
-    if (gameState === STATE_SPLASH) {
-        if (!hkDiagLines && hkLogoAttempted) hkDiagLines = buildHkDiag();
-        if (hkLogoDrawFailed && hkLogoErr && hkDiagLines && hkDiagLines.indexOf("logo err: " + hkLogoErr) < 0) hkDiagLines.push("logo err: " + hkLogoErr);
-        lines = hkDiagLines;
-        title = "DIAGNOSTICO RUNTIME (foto de esta pantalla)";
-    } else if (hwDiagLines || hwStreamFailed) {
-        if (hwDiagShow > 1500) return;
-        hwDiagShow++;
-        const L = [];
-        diagAdd(L, "3D FALLO: " + String(hwLoadErrorMsg || "?") + " | protoFix ok=" + hkProtoFixed + " fail=" + hkProtoFixFailed);
-        if (hwDiagLines) for (let i = 0; i < hwDiagLines.length; i++) diagAdd(L, hwDiagLines[i]);
-        lines = L.slice(0, 30);
-        title = "DIAGNOSTICO 3D (foto de esta pantalla)";
-    }
-    if (!lines || lines.length === 0) return;
-    const h = 18 + lines.length * 13;
-    Draw.rect(0, 0, SCREEN_W, h + 4, rgba(0, 0, 0, 110));
-    fnt.scale = Math.fround(0.40);
-    fnt.color = rgba(120, 255, 140, 128);
-    fnt.print(8, 4, title);
-    fnt.color = rgba(235, 235, 235, 128);
-    for (let i = 0; i < lines.length; i++) fnt.print(8, 18 + i * 13, lines[i]);
-}
+const SPLASH_DURATION = 135; // ~2.25s a 60Hz
 
 function freeHkLogo() {
     if (hkLogoImg) {
@@ -4051,9 +3980,8 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
                     hkLogoImg.height = 216;
                 }
             }
-        } catch (e) {
+        } catch (_) {
             hkLogoImg = null;
-            hkLogoErr = e ? String(e) : "error carga logo";
         }
     }
 
@@ -4072,8 +4000,7 @@ function drawHkSplashScreen(screenW, screenH, fnt) {
         try {
             hkLogoImg.color = rgba(255, 255, 255, alpha);
             hkLogoImg.draw(lx, ly);
-        } catch (e) {
-            hkLogoErr = e ? String(e) : "error dibujo logo";
+        } catch (_) {
             hkLogoDrawFailed = true;
         }
     }
@@ -4375,7 +4302,7 @@ function resetGame() {
 resetGame();
 
 let runtimeErr = null;
-const hkFrameBody = () => {
+Screen.display(() => {
     if (runtimeErr !== null) {
         Draw.rect(0, 0, SCREEN_W, SCREEN_H, rgba(55, 0, 0, 128));
         fnt.scale = Math.fround(0.76);
@@ -5061,8 +4988,4 @@ const hkFrameBody = () => {
     } catch (e) {
         runtimeErr = String(e) + " | " + String(e && e.stack ? e.stack : "").replace(/\n/g, " ");
     }
-};
-Screen.display(() => {
-    hkFrameBody();
-    if (runtimeErr === null) { try { drawHkDiagOverlay(); } catch (_) {} }
 });

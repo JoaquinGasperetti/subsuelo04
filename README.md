@@ -71,7 +71,7 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 ## 1. Arquitectura general y runtime
 
 - **Runtime base**: `athena.elf` compilado desde AthenaEnv `clean-api` (commit `ad1949e`, [CI build](https://github.com/DanielSant0s/AthenaEnv/actions/runs/44427724969)), con soporte de API VU1 moderna (`Render.init()`, `Render.begin()`, `RenderObject.render()`) y el [parche del allocator de GS VRAM](https://github.com/DanielSant0s/AthenaEnv/commit/6527a7375e4a10c254279bc938859a0a75af4214) que evita la superposición de rangos de memoria al alinear texturas.
-- **Formato de despliegue monolítico**: Todo el código del motor y el juego se empaqueta en un único archivo `main.js` (~162 KB, ~4.000 líneas) **sin `import` ES6**. Esto elimina fallos de resolución de rutas relativas y sensibilidad a mayúsculas/minúsculas entre `mass:/` (USB FAT32), `cdfs:/` (DVD ISO9660) y `host:/` (PCSX2).
+- **Formato de despliegue monolítico**: Todo el código del motor y el juego se empaqueta en un único archivo `main.js` (~205 KB, ~5.000 líneas) **sin `import` ES6**. Esto elimina fallos de resolución de rutas relativas y sensibilidad a mayúsculas/minúsculas entre `mass:/` (USB FAT32), `cdfs:/` (DVD ISO9660) y `host:/` (PCSX2).
 - **Organización lógica interna dentro de `main.js`**:
   - `src/config.js`: ajustes dinámicos (`GAME_SETTINGS`), utilidades Float64 seguras para MIPS, empaquetado RGBA, estado 2D (`restore2DRenderState`) y telemetría de consola (`consoleStats`).
   - `src/storage.js`: persistencia JSON en Memory Card (`mc0:/SUBSUELO04/save.json`).
@@ -122,6 +122,14 @@ En cada cuadro de `renderHardware3DWorld()` el motor ejecuta estrictamente esta 
 
 ### 2.4 Fallback 2.5D por software
 Si la consola o el usuario selecciona `2.5D MEDIA` (96 rayos) o `2.5D RAPIDA` (64 rayos), el motor usa un raycaster DDA sin asignaciones por cuadro con tablas precalculadas en `Float64Array` (`QUALITY_TABLES`), caché de anchos de columna en `Int16Array` (`colStartX`, `colWidth`), agrupamiento de columnas contiguas (*Span Batching* en `flushWallSpan`) y sombreado Gouraud por primitivas `Draw.quad` / `Draw.triangle`.
+
+### 2.5 Animación procedural del Acechador (sin assets nuevos)
+El Acechador es un único `RenderObject` rígido (`stalker.obj`, 311 tris), así que su "animación" se calcula por código y se aplica solo a posición y rotación al llamar a `drawHwObject(...)`. **No agrega draw calls, triángulos ni memoria de assets.**
+
+- **Funciones**: `resetStalkerAnim(inst, x, y)` (se llama al iniciar la partida y la cinemática) y `updateStalkerAnim(inst, lookX, lookY, dtScale, hasLos, isBlinded)` (una vez por cuadro, tanto en gameplay como en `STATE_CINEMATIC` con `cinStalker`). Los resultados quedan en `animOutY`, `animOutRx`, `animOutRy` y `animOutRz`.
+- **Qué hace**: balanceo vertical y inclinaciones con frecuencia proporcional a la velocidad real (calculada del desplazamiento por cuadro); patrulla lenta y pesada, investigación cautelosa, persecución inclinada hacia adelante y más agresiva, y espasmos cuando la linterna lo frena (`isBlinded`). Gira suavemente hacia su dirección de movimiento (arco más corto, estilo `cinLerpAngle`) y solo se orienta al jugador cuando lo persigue o lo tiene a la vista.
+- **Reglas de rendimiento**: tabla de senos precomputada (`Float64Array`, 256 entradas), cero asignaciones por cuadro y avance con `dtScale` (paridad NTSC/PAL).
+- **Ajuste fino**: las amplitudes están en `updateStalkerAnim` (`bobAmp`, `rollAmp`, `pitchBase`, `freqScale` por estado). Con valores simulados el rebote máximo ronda 5 cm y la inclinación máxima ~11° al perseguir.
 
 ## 3. Presupuesto poligonal y pipeline de assets 3D
 
@@ -242,6 +250,28 @@ Presionando **R2** durante la partida (o activando *FPS / Diagnóstico* en Opcio
 4. **Activar `accurate_clipping = true`** únicamente en mallas grandes atravesables de cerca (paredes, puertas, rejas); dejar `false` en piso, techo, props y personajes.
 5. **Respetar el orden de cámara** (`Camera.target` antes de `Camera.position`) y alternar `DEPTH_TEST_ENABLE` (`true` + `DEPTH_GEQUAL` en 3D, `false` en 2D/HUD).
 6. **Auditar el presupuesto en consola real con `R2`**: verificar que `GS VRAM` no se acerque a 4.096 KB, mantener `TRI` bajo ~1.800–2.500 y evitar asignaciones por cuadro en QuickJS.
+7. **Después de crear cualquier `Image`, `RenderData` o `RenderObject` nuevo**, pasarlo por `hkFixProto(obj, Clase)` antes de asignarle propiedades (ver sección 9).
+
+## 9. Compatibilidad del runtime y solución de problemas
+
+### 9.1 Objetos nativos sin prototipo (`hkFixProto`)
+**Síntoma**: al probar en **PCSX2**, el juego mostraba `TypeError: not a function` en `drawHkSplashScreen` (el logo de HK no aparecía) o `RenderObject sin render()`, y la partida pasaba sola al modo 2.5D en vez de usar el 3D VU1.
+
+**Causa observada**: las clases `Image`, `RenderData` y `RenderObject` tenían todos sus métodos (`Image.prototype.draw`, `RenderObject.prototype.render`, etc.), pero **los objetos creados con `new` llegaban con prototipo `null`** (`Object.getPrototypeOf(obj) === null`). Sin prototipo no existen `draw()`/`render()`, y asignaciones como `img.width = 216` o `obj.position = {...}` quedaban como propiedades de datos sueltas en lugar de pasar por los accesores del motor. No se determinó el motivo exacto en el runtime; antes funcionaba en PS2 real sin este arreglo.
+
+**Solución**: la función `hkFixProto(obj, Cls)` reconecta `Cls.prototype` con `Object.setPrototypeOf` y **solo actúa si el prototipo no coincide**, así que en un runtime sano no cambia nada. Se aplica justo después de crear el objeto y **antes** de asignarle propiedades:
+- texturas (`new Image(...)`) y logo de HK,
+- `new RenderData(...)`,
+- `new RenderObject(...)`.
+
+**Cómo diagnosticarlo si reaparece**: mostrar `typeof obj.draw` / `typeof obj.render`, `Object.getPrototypeOf(obj) === Clase.prototype` y `Object.getOwnPropertyNames(obj)`. Si el objeto tiene como propiedades propias `width`, `color`, `position` o `rotation`, esas asignaciones se hicieron sin prototipo.
+
+### 9.2 Degradación segura del 3D
+- `drawHwObject` usa `obj.render()` y, si no existe, `obj.draw()`. Si ninguno existe **no lanza excepción**: marca el fallo, `render3DWorld` desactiva el 3D VU1 (`hw3dReady = false`) y continúa en 2.5D en el mismo cuadro. El motivo queda en `hwLoadErrorMsg` y se ve en el panel `R2` / pantalla de carga 3D.
+- Si el logo de HK no se puede cargar o dibujar, el splash muestra el texto "HK ENTERTAINMENT" en su lugar.
+
+### 9.3 Runtime del repositorio
+El `athena.elf` incluido (3.753.784 bytes) expone `Render.init/begin/setView`, `RenderObject.render` e `Image.draw`. Una versión anterior del runtime (~5,7 MB) **no** tiene `Render.begin`: si el juego cae siempre a 2.5D, verificá primero el tamaño del `athena.elf` que se está ejecutando.
 
 ---
 
@@ -249,6 +279,8 @@ Presionando **R2** durante la partida (o activando *FPS / Diagnóstico* en Opcio
 
 - [x] Sistema de cinemáticas declarativo (`src/cinematic.js` embebido en `main.js`) con cámara interpolada, efectos VHS, subtítulos máquina de escribir, aparición de El Acechador y salto manteniendo `START`.
 - [x] Cinemática introductoria *found footage* de 44 segundos al iniciar Nueva Partida (`STATE_MAP_LOADING` → `STATE_CINEMATIC` → `STATE_PLAY`).
+- [x] Animación procedural del Acechador (balanceo, inclinación por estado de IA, espasmos con linterna y orientación hacia su movimiento), también en la cinemática.
+- [x] Compatibilidad con objetos nativos sin prototipo (`hkFixProto`) y degradación segura del 3D a 2.5D.
 - [ ] Grabar y convertir a PS2 SPU2 ADPCM (`.adp`) los efectos cortos de cinemática y gameplay (`vhs_static.adp`, `stalker_growl.adp`, `gate_locked.adp`, `flashlight.adp`, `heartbeat.adp`) y habilitar su precarga opcional.
 - [ ] Agregar cinemática de evacuación (apertura de compuerta Norte al reunir los 4 fusibles) reutilizando `startCinematic(...)`.
 - [ ] Validar en hardware PS2 real (OPL USB 1.1 y DVD-R) los 44 segundos completos de la intro en modo 3D VU1 y 2.5D con telemetría `R2` (FPS, EE RAM y GS VRAM).
