@@ -10,6 +10,7 @@ const RECORDS = {
     bestNormalSec: 0,
     bestNightmareSec: 0,
     escapes: 0,
+    maxChapterUnlocked: 1,
     mcAvailable: false
 };
 
@@ -45,6 +46,7 @@ function loadSaveData() {
             if (typeof data.difficulty === "number" && (data.difficulty === 0 || data.difficulty === 1)) {
                 GAME_SETTINGS.difficulty = data.difficulty | 0;
             }
+            if (typeof data.skipIntro === "boolean") GAME_SETTINGS.skipIntro = data.skipIntro;
             if (typeof data.bestNormalSec === "number" && data.bestNormalSec > 0) {
                 RECORDS.bestNormalSec = data.bestNormalSec | 0;
             }
@@ -53,6 +55,9 @@ function loadSaveData() {
             }
             if (typeof data.escapes === "number" && data.escapes > 0) {
                 RECORDS.escapes = data.escapes | 0;
+            }
+            if (typeof data.maxChapterUnlocked === "number" && data.maxChapterUnlocked >= 1 && data.maxChapterUnlocked <= 3) {
+                RECORDS.maxChapterUnlocked = data.maxChapterUnlocked | 0;
             }
             RECORDS.mcAvailable = true;
             return true;
@@ -77,9 +82,11 @@ function saveGameData() {
             audioVolume: GAME_SETTINGS.audioVolume,
             showFps: GAME_SETTINGS.showFps,
             difficulty: GAME_SETTINGS.difficulty,
+            skipIntro: GAME_SETTINGS.skipIntro,
             bestNormalSec: RECORDS.bestNormalSec,
             bestNightmareSec: RECORDS.bestNightmareSec,
-            escapes: RECORDS.escapes
+            escapes: RECORDS.escapes,
+            maxChapterUnlocked: RECORDS.maxChapterUnlocked
         });
         const f = std.open(SAVE_PATH, "w");
         if (!f) return false;

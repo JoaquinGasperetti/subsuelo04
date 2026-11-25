@@ -305,8 +305,8 @@ let bootSkipAudio = false;
 
 const BOOT_LOAD_STEPS = [
     { kind: "audio_iop",   label: "AUDIO: MODULOS IOP" },
-    { kind: "audio_amb",   label: "AUDIO: ambient.wav" },
-    { kind: "audio_chase", label: "AUDIO: chase.wav" },
+    { kind: "audio_amb",   label: "AUDIO: ambient.ogg" },
+    { kind: "audio_chase", label: "AUDIO: chase.ogg" },
     { kind: "audio_play",  label: "ENTRANDO AL MENU..." }
 ];
 
@@ -324,6 +324,8 @@ let hwStreamFailed = false;
 let hwLoadErrorMsg = "";
 let hwDrawFailed = false;
 let mapLoadPhase = 0;
+let hwLoadedChapterIdx = -1;
+const hwTexCache = {};
 
 const HW3D_STREAM_STEPS = [
     { kind: "init",    label: "MOTOR 3D (VU1 / CAMARA)" },
@@ -340,6 +342,27 @@ const HW3D_STREAM_STEPS = [
     { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEMS: DISYUNTOR" },
     { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEMS: NOTAS" }
 ];
+
+function prepareChapter3D(chapterIdx) {
+    const ch = CHAPTERS[chapterIdx] || CHAPTERS[0];
+    const p = ch.meshPrefix || "map_";
+    HW3D_STREAM_STEPS[1].obj = ["assets/models/", p, "floor.obj"].join("");
+    HW3D_STREAM_STEPS[2].obj = ["assets/models/", p, "ceiling.obj"].join("");
+    HW3D_STREAM_STEPS[3].obj = ["assets/models/", p, "walls_concrete.obj"].join("");
+    HW3D_STREAM_STEPS[4].obj = ["assets/models/", p, "walls_rust.obj"].join("");
+    HW3D_STREAM_STEPS[5].obj = ["assets/models/", p, "walls_ritual.obj"].join("");
+    HW3D_STREAM_STEPS[6].obj = ["assets/models/", p, "exit.obj"].join("");
+    HW3D_STREAM_STEPS[7].obj = ["assets/models/", p, "gates.obj"].join("");
+    hwStaticObjs = [];
+    hwGatesObj = null;
+    hwStreamStep = 0;
+    hwStreamDone = false;
+    hwStreamFailed = false;
+    hw3dReady = false;
+    hwStreamCooldown = 2;
+    hwLoadErrorMsg = "";
+    hwLoadedChapterIdx = chapterIdx;
+}
 
 const MAP_PCT_LABELS = [
     "0%   (0/13)",  "8%   (1/13)",  "15%  (2/13)", "23%  (3/13)",
@@ -359,11 +382,16 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
     if (!fileExistsSafe(objPath)) return null;
     try {
         let tex = null;
-        if (texPath && fileExistsSafe(texPath)) {
-            tex = new Image(texPath);
-            hkFixProto(tex, Image);
-            if (tex && typeof tex.optimize === "function") {
-                try { tex.optimize(); } catch (_) {}
+        if (texPath) {
+            if (hwTexCache[texPath]) {
+                tex = hwTexCache[texPath];
+            } else if (fileExistsSafe(texPath)) {
+                tex = new Image(texPath);
+                hkFixProto(tex, Image);
+                if (tex && typeof tex.optimize === "function") {
+                    try { tex.optimize(); } catch (_) {}
+                }
+                if (tex) hwTexCache[texPath] = tex;
             }
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
@@ -382,7 +410,7 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
             hkFixProto(obj, RenderObject);
             // Retener la textura solo después de crear el objeto: si falla la
             // carga, no dejamos imágenes/meshes huérfanos vivos hasta el final.
-            if (tex) hwKeptTextures.push(tex);
+            if (tex && hwKeptTextures.indexOf(tex) === -1) hwKeptTextures.push(tex);
             obj.position = { x: 0.0, y: 0.0, z: 0.0 };
             obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
         }
@@ -449,8 +477,9 @@ function buildHwEntityTransforms() {
     for (let i = 0; i < entities.length; i++) {
         const e = entities[i];
         let y = 0.55;
-        if (e.kind === "breaker") y = 0.0;
+        if (e.kind === "breaker" || e.kind === "locker" || e.kind === "npc") y = 0.0;
         else if (e.kind === "note") y = 0.04;
+        else if (e.kind === "decoy") y = 0.42;
         hwEntityTransforms.push({
             position: {
                 x: toF64(e.x) * WORLD_CELL_SIZE,
@@ -479,10 +508,10 @@ function stepBootLoad() {
         } else if (step.kind === "audio_amb") {
             if (!bootSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
                 const ambPath = resolveFirstExisting([
-                    "assets/audio/ambient.wav",
                     "assets/audio/ambient.ogg",
-                    "assets/ambient.wav",
-                    "assets/ambient.ogg"
+                    "assets/audio/ambient.wav",
+                    "assets/ambient.ogg",
+                    "assets/ambient.wav"
                 ]);
                 if (ambPath) {
                     try {
@@ -496,8 +525,8 @@ function stepBootLoad() {
         } else if (step.kind === "audio_chase") {
             if (!bootSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
                 const chasePath = resolveFirstExisting([
-                    "assets/audio/chase.wav",
-                    "assets/audio/chase.ogg"
+                    "assets/audio/chase.ogg",
+                    "assets/audio/chase.wav"
                 ]);
                 if (chasePath) {
                     try {
@@ -817,8 +846,10 @@ function renderHardware3DWorld(
         Render.begin();
         // Camera.target conserva el desplazamiento del objetivo anterior y mueve
         // la posición de cámara. Por eso se fija la posición al final en cada frame.
-        Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
-        Camera.position(camX, WORLD_EYE_H, camZ);
+        const camY = (player.eyeH !== undefined) ? toF64(player.eyeH) : WORLD_EYE_H;
+        const targetY = (player.pitchY !== undefined) ? fadd(camY, toF64(player.pitchY)) : camY;
+        Camera.target(camX + dirX * 4.0, targetY, camZ + dirZ * 4.0);
+        Camera.position(camX, camY, camZ);
         Camera.update();
 
         // Actualizar luz principal solo cuando cambia la linterna (cero spam a C por cuadro)
@@ -846,15 +877,21 @@ function renderHardware3DWorld(
         for (let i = 0; i < entities.length; i++) {
             const e = entities[i];
             if (e.taken) continue;
-            const prop = hwPropObjs[e.kind];
+            let prop = hwPropObjs[e.kind];
+            if (!prop) {
+                if (e.kind === "decoy") prop = hwPropObjs.battery;
+                else if (e.kind === "locker") prop = hwPropObjs.breaker;
+                else if (e.kind === "npc") prop = hwStalkerObj;
+            }
             if (!prop) continue;
             const dxC = toF64(e.x) - px;
             const dyC = toF64(e.y) - py;
             if ((dxC * dxC + dyC * dyC) > 81.0) continue;
             const pose = hwEntityTransforms[i];
             if (!pose) continue;
-            if (e.kind !== "breaker" && e.kind !== "note") pose.position.y = 0.55 + bobY;
-            pose.rotation.y = (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY;
+            const isStatic = (e.kind === "breaker" || e.kind === "note" || e.kind === "locker" || e.kind === "npc");
+            if (!isStatic) pose.position.y = (e.kind === "decoy" ? 0.42 : 0.55) + bobY;
+            pose.rotation.y = isStatic ? 0.0 : spinY;
             drawHwObject(prop,
                 pose.position.x, pose.position.y, pose.position.z,
                 pose.rotation.x, pose.rotation.y, pose.rotation.z);

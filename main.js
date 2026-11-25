@@ -32,7 +32,9 @@ const GAME_SETTINGS = {
 // Mostrar panel de diagnostico de rendimiento
     showFps: false,
     // Dificultad: 0 = NORMAL, 1 = PESADILLA
-    difficulty: 0
+    difficulty: 0,
+    // Omitir automaticamente la cinematica introductoria al iniciar Nueva Partida
+    skipIntro: false
 };
 
 const QUALITY_RAYS = [128, 96, 64];
@@ -196,6 +198,7 @@ const RECORDS = {
     bestNormalSec: 0,
     bestNightmareSec: 0,
     escapes: 0,
+    maxChapterUnlocked: 1,
     mcAvailable: false
 };
 
@@ -231,6 +234,7 @@ function loadSaveData() {
             if (typeof data.difficulty === "number" && (data.difficulty === 0 || data.difficulty === 1)) {
                 GAME_SETTINGS.difficulty = data.difficulty | 0;
             }
+            if (typeof data.skipIntro === "boolean") GAME_SETTINGS.skipIntro = data.skipIntro;
             if (typeof data.bestNormalSec === "number" && data.bestNormalSec > 0) {
                 RECORDS.bestNormalSec = data.bestNormalSec | 0;
             }
@@ -239,6 +243,9 @@ function loadSaveData() {
             }
             if (typeof data.escapes === "number" && data.escapes > 0) {
                 RECORDS.escapes = data.escapes | 0;
+            }
+            if (typeof data.maxChapterUnlocked === "number" && data.maxChapterUnlocked >= 1 && data.maxChapterUnlocked <= 3) {
+                RECORDS.maxChapterUnlocked = data.maxChapterUnlocked | 0;
             }
             RECORDS.mcAvailable = true;
             return true;
@@ -263,9 +270,11 @@ function saveGameData() {
             audioVolume: GAME_SETTINGS.audioVolume,
             showFps: GAME_SETTINGS.showFps,
             difficulty: GAME_SETTINGS.difficulty,
+            skipIntro: GAME_SETTINGS.skipIntro,
             bestNormalSec: RECORDS.bestNormalSec,
             bestNightmareSec: RECORDS.bestNightmareSec,
-            escapes: RECORDS.escapes
+            escapes: RECORDS.escapes,
+            maxChapterUnlocked: RECORDS.maxChapterUnlocked
         });
         const f = std.open(SAVE_PATH, "w");
         if (!f) return false;
@@ -365,10 +374,10 @@ function initAudio() {
 
         if (typeof Sound.Stream === "function") {
             const ambPath = resolveFirstExisting([
-                "assets/audio/ambient.wav",
                 "assets/audio/ambient.ogg",
-                "assets/ambient.wav",
-                "assets/ambient.ogg"
+                "assets/audio/ambient.wav",
+                "assets/ambient.ogg",
+                "assets/ambient.wav"
             ]);
             if (ambPath) {
                 try {
@@ -379,8 +388,8 @@ function initAudio() {
                 }
             }
             const chasePath = resolveFirstExisting([
-                "assets/audio/chase.wav",
-                "assets/audio/chase.ogg"
+                "assets/audio/chase.ogg",
+                "assets/audio/chase.wav"
             ]);
             if (chasePath) {
                 try {
@@ -493,17 +502,17 @@ function isAudioReady() {
 }
 
 // --- MODULE: src/map.js ---
-// Mapa 20x20 del Subsuelo 04 y colisiones ultra-ligeras sin allocaciones por cuadro
-// 0 = Pasillo libre
-// 1 = Pared de hormigon humedo
-// 2 = Pilar/estructura oxidada
-// 3 = Pared de zona ritual / sangre
-// 4 = Compuerta blindada de salida (Norte)
-// 5 = Reja de seguridad (se abre al activar el Disyuntor Central)
+// ============================================================================
+// Campaña lineal de 3 Capítulos (mapas 20x20), colisiones AABB sin allocs,
+// notas de lore, triggers de radio narrativa y configuración de entidades.
+// 0 = Pasillo libre        1 = Pared hormigon    2 = Pilar/estructura oxidada
+// 3 = Zona ritual / sangre 4 = Compuerta salida  5 = Reja de seguridad
+// ============================================================================
 
 const MAP_W = 20;
 const MAP_H = 20;
 
+// CAPÍTULO 1: SUBSUELO 04 — EL APAGÓN (mapa original preservado)
 const BASE_MAP = [
     [1,1,1,1,1,1,1,1,1,4,4,1,1,1,1,1,1,1,1,1],
     [1,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,1],
@@ -527,10 +536,186 @@ const BASE_MAP = [
     [1,1,1,1,1,1,1,1,1,3,3,1,1,1,1,1,1,1,1,1]
 ];
 
-function createWorldGrid() {
+// CAPÍTULO 2: TÚNELES DE MANTENIMIENTO Y CALDERAS (pasillos estrechos + sala de válvulas)
+const CH2_MAP = [
+    [1,1,1,1,1,1,1,1,1,4,4,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,2,0,0,0,0,0,0,0,0,0,0,2,0,0,0,1],
+    [1,0,2,0,2,0,1,1,1,0,0,1,1,1,0,2,0,2,0,1],
+    [1,0,2,0,0,0,1,0,0,0,0,0,0,1,0,0,0,2,0,1],
+    [1,0,0,0,1,1,1,0,2,0,0,2,0,1,1,1,0,0,0,1],
+    [1,2,2,0,5,0,0,0,0,0,0,0,0,0,0,5,0,2,2,1],
+    [1,0,0,0,5,0,2,1,0,2,2,0,1,2,0,5,0,0,0,1],
+    [1,0,1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,1,0,1],
+    [1,0,1,0,1,1,2,0,1,0,0,1,0,2,1,1,0,1,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,2,1,1,0,2,2,0,0,0,0,0,0,2,2,0,1,1,2,1],
+    [1,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,1],
+    [1,0,2,1,1,0,1,0,1,0,0,1,0,1,0,1,1,2,0,1],
+    [1,0,0,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,1],
+    [1,1,2,0,1,1,1,2,0,2,2,0,2,1,1,1,0,2,1,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,2,2,0,1,0,2,0,0,0,0,2,0,1,0,2,2,0,1],
+    [1,0,0,0,0,1,0,0,0,3,3,0,0,0,1,0,0,0,0,1],
+    [1,0,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+// CAPÍTULO 3: PABELLÓN DE CONTENCIÓN Y ASCENSOR DE SUPERFICIE (zona ritual + clímax)
+const CH3_MAP = [
+    [1,1,1,1,1,1,1,1,1,4,4,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,3,3,0,1,1,0,0,0,0,0,0,1,1,0,3,3,0,1],
+    [1,0,3,0,0,0,0,0,3,0,0,3,0,0,0,0,0,3,0,1],
+    [1,0,0,0,1,0,3,0,3,0,0,3,0,3,0,1,0,0,0,1],
+    [1,1,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,1,1],
+    [1,0,0,0,5,0,2,0,1,0,0,1,0,2,0,5,0,0,0,1],
+    [1,0,3,0,5,0,2,0,0,0,0,0,0,2,0,5,0,3,0,1],
+    [1,0,3,0,1,0,0,0,3,0,0,3,0,0,0,1,0,3,0,1],
+    [1,0,0,0,0,0,3,0,0,0,0,0,0,3,0,0,0,0,0,1],
+    [3,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,3],
+    [3,0,0,0,0,3,0,2,0,0,0,0,2,0,3,0,0,0,0,3],
+    [1,0,3,1,0,3,0,0,0,3,3,0,0,0,3,0,1,3,0,1],
+    [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+    [1,1,0,3,3,0,1,1,0,0,0,0,1,1,0,3,3,0,1,1],
+    [1,0,0,0,0,0,0,0,0,2,2,0,0,0,0,0,0,0,0,1],
+    [1,0,3,0,1,0,3,0,0,0,0,0,0,3,0,1,0,3,0,1],
+    [1,0,0,0,1,0,3,3,0,0,0,0,3,3,0,1,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]
+];
+
+const CHAPTERS = [
+    {
+        id: 0,
+        code: "CAP. 1",
+        title: "SUBSUELO 04: EL APAGON",
+        objectiveBreaker: "ACTIVA EL DISYUNTOR ROJO [SELECT: MAPA]",
+        objectiveExit: "SALIDA NORTE ABIERTA! [X EN COMPUERTA]",
+        grid: BASE_MAP,
+        meshPrefix: "map_",
+        playerSpawn: { x: 10.0, y: 1.8, ang: 1.5708 },
+        stalkerSpawn: { x: 10.5, y: 16.5, speedNormal: 0.024, speedNightmare: 0.029 },
+        waypoints: [
+            { x: 10.0, y: 10.0 }, { x: 10.0, y: 16.5 },
+            { x: 3.0,  y: 10.0 }, { x: 16.5, y: 10.0 },
+            { x: 3.5,  y: 3.0  }, { x: 16.5, y: 3.0  }
+        ],
+        entities: [
+            { kind: "fuse",    x: 10.0, y: 17.5, taken: false },
+            { kind: "fuse",    x: 10.0, y: 9.5,  taken: false },
+            { kind: "fuse",    x: 2.5,  y: 17.5, taken: false },
+            { kind: "fuse",    x: 17.5, y: 17.5, taken: false },
+            { kind: "breaker", x: 10.0, y: 11.5, taken: false },
+            { kind: "battery", x: 8.5,  y: 5.5,  taken: false },
+            { kind: "battery", x: 1.5,  y: 2.5,  taken: false },
+            { kind: "battery", x: 18.5, y: 2.5,  taken: false },
+            { kind: "decoy",   x: 11.5, y: 6.5,  taken: false },
+            { kind: "decoy",   x: 3.5,  y: 12.5, taken: false },
+            { kind: "locker",  x: 6.5,  y: 5.5,  faceAng: 0.0,    taken: false },
+            { kind: "locker",  x: 12.5, y: 13.5, faceAng: 3.1416, taken: false },
+            { kind: "note",    x: 10.0, y: 3.5,  msgIdx: 0, taken: false },
+            { kind: "note",    x: 10.0, y: 14.5, msgIdx: 1, taken: false },
+            { kind: "note",    x: 3.5,  y: 10.5, msgIdx: 2, taken: false },
+            { kind: "note",    x: 16.5, y: 10.5, msgIdx: 3, taken: false }
+        ],
+        radioTriggers: [
+            { x: 10.0, y: 3.5,  radius: 2.2, text: "VALDEZ (RADIO): Me escuchas? Las rejas se trabaron. Busca el disyuntor rojo en el centro.", duration: 240, fired: false },
+            { x: 10.0, y: 10.5, radius: 2.5, text: "VALDEZ (RADIO): Hay algo en el pasillo transversal... agachate con [CUAD] si lo ois cerca.", duration: 240, fired: false },
+            { x: 10.0, y: 16.5, radius: 2.4, text: "VALDEZ (RADIO): Estas en la zona ritual. Toma ese fusible y sali de ahi cuanto antes.", duration: 220, fired: false }
+        ]
+    },
+    {
+        id: 1,
+        code: "CAP. 2",
+        title: "TUNELES DE MANTENIMIENTO",
+        objectiveBreaker: "ACTIVA VALVULA CENTRAL [SELECT: MAPA]",
+        objectiveExit: "ESCLUSA NORTE ABIERTA! [X EN COMPUERTA]",
+        grid: CH2_MAP,
+        meshPrefix: "ch2_",
+        playerSpawn: { x: 10.0, y: 18.45, ang: -1.5708 },
+        stalkerSpawn: { x: 10.0, y: 3.5, speedNormal: 0.026, speedNightmare: 0.031 },
+        waypoints: [
+            { x: 10.0, y: 9.5  }, { x: 10.0, y: 15.5 },
+            { x: 2.5,  y: 9.5  }, { x: 17.5, y: 9.5  },
+            { x: 2.5,  y: 15.5 }, { x: 16.5, y: 3.5  }
+        ],
+        entities: [
+            { kind: "fuse",    x: 2.5,  y: 1.5,  taken: false },
+            { kind: "fuse",    x: 17.5, y: 1.5,  taken: false },
+            { kind: "fuse",    x: 2.5,  y: 13.5, taken: false },
+            { kind: "fuse",    x: 17.5, y: 13.5, taken: false },
+            { kind: "breaker", x: 10.0, y: 9.5,  taken: false },
+            { kind: "battery", x: 10.0, y: 13.5, taken: false },
+            { kind: "battery", x: 5.5,  y: 5.5,  taken: false },
+            { kind: "battery", x: 14.5, y: 5.5,  taken: false },
+            { kind: "decoy",   x: 7.5,  y: 15.5, taken: false },
+            { kind: "decoy",   x: 12.5, y: 3.5,  taken: false },
+            { kind: "locker",  x: 7.5,  y: 9.5,  faceAng: 0.0,    taken: false },
+            { kind: "locker",  x: 12.5, y: 9.5,  faceAng: 3.1416, taken: false },
+            { kind: "locker",  x: 5.5,  y: 15.5, faceAng: 0.0,    taken: false },
+            { kind: "npc",     x: 10.0, y: 15.5, name: "VALDEZ", spoken: false,
+              dialog: "VALDEZ: Estoy herido... activa la valvula central y junta los 4 fusibles para pasar a Contencion.", taken: false },
+            { kind: "note",    x: 10.0, y: 7.5,  msgIdx: 4, taken: false },
+            { kind: "note",    x: 10.0, y: 3.5,  msgIdx: 5, taken: false }
+        ],
+        radioTriggers: [
+            { x: 10.0, y: 17.5, radius: 2.0, text: "VALDEZ (RADIO): Estoy en el cruce de calderas, frente a vos. Ven con cuidado, usa [L2] para distraerlo.", duration: 250, fired: false },
+            { x: 10.0, y: 9.5,  radius: 2.5, text: "DRA. MORALES (RADIO): Aqui Sala de Control. El sujeto cruzo a los tuneles. No enciendas la luz si te rodea.", duration: 240, fired: false },
+            { x: 10.0, y: 2.5,  radius: 2.2, text: "DRA. MORALES (RADIO): La esclusa Norte lleva al Pabellon de Contencion. Apurate!", duration: 210, fired: false }
+        ]
+    },
+    {
+        id: 2,
+        code: "CAP. 3",
+        title: "PABELLON DE CONTENCION",
+        objectiveBreaker: "DESBLOQUEA NUCLEO CENTRAL [SELECT: MAPA]",
+        objectiveExit: "ASCENSOR NORTE LISTO! [X PARA ESCAPAR]",
+        grid: CH3_MAP,
+        meshPrefix: "ch3_",
+        playerSpawn: { x: 10.0, y: 18.45, ang: -1.5708 },
+        stalkerSpawn: { x: 10.0, y: 5.5, speedNormal: 0.028, speedNightmare: 0.033 },
+        waypoints: [
+            { x: 10.0, y: 10.0 }, { x: 10.0, y: 5.5  },
+            { x: 4.5,  y: 10.0 }, { x: 15.5, y: 10.0 },
+            { x: 2.5,  y: 1.5  }, { x: 17.5, y: 1.5  }
+        ],
+        entities: [
+            { kind: "fuse",    x: 1.5,  y: 1.5,  taken: false },
+            { kind: "fuse",    x: 18.5, y: 1.5,  taken: false },
+            { kind: "fuse",    x: 1.5,  y: 16.5, taken: false },
+            { kind: "fuse",    x: 18.5, y: 16.5, taken: false },
+            { kind: "breaker", x: 10.0, y: 10.0, taken: false },
+            { kind: "battery", x: 10.0, y: 13.5, taken: false },
+            { kind: "battery", x: 5.5,  y: 5.5,  taken: false },
+            { kind: "battery", x: 14.5, y: 5.5,  taken: false },
+            { kind: "decoy",   x: 10.0, y: 16.5, taken: false },
+            { kind: "decoy",   x: 10.0, y: 3.5,  taken: false },
+            { kind: "locker",  x: 6.5,  y: 10.0, faceAng: 0.0,    taken: false },
+            { kind: "locker",  x: 13.5, y: 10.0, faceAng: 3.1416, taken: false },
+            { kind: "locker",  x: 10.0, y: 1.5,  faceAng: 1.5708, taken: false },
+            { kind: "note",    x: 10.0, y: 13.5, msgIdx: 6, taken: false },
+            { kind: "note",    x: 10.0, y: 5.5,  msgIdx: 7, taken: false }
+        ],
+        radioTriggers: [
+            { x: 10.0, y: 17.5, radius: 2.2, text: "DRA. MORALES (RADIO): Ultimo tramo. Libera el nucleo central y energiza el ascensor Norte con 4 fusibles.", duration: 250, fired: false },
+            { x: 10.0, y: 10.0, radius: 2.6, text: "DRA. MORALES (RADIO): Cuidado! Aqui nacio el Sujeto 04. Es mas rapido en este sector.", duration: 240, fired: false },
+            { x: 10.0, y: 2.5,  radius: 2.2, text: "DRA. MORALES (RADIO): El ascensor a la superficie esta frente a vos. No te detengas!", duration: 220, fired: false }
+        ]
+    }
+];
+
+let activeChapterIdx = 0;
+
+function getActiveChapter() {
+    return CHAPTERS[activeChapterIdx] || CHAPTERS[0];
+}
+
+function createWorldGrid(chapterIdx) {
+    const idx = (chapterIdx !== undefined) ? chapterIdx : activeChapterIdx;
+    const src = (CHAPTERS[idx] || CHAPTERS[0]).grid;
     const grid = [];
     for (let y = 0; y < MAP_H; y++) {
-        grid.push(BASE_MAP[y].slice());
+        grid.push(src[y].slice());
     }
     return grid;
 }
@@ -563,8 +748,6 @@ function isPosWalkable(grid, nx, ny, margin = 0.25) {
     return true;
 }
 
-// Avanza un eje en pasos cortos para que un cuadro lento o un cambio futuro de
-// velocidad no permita atravesar una celda sólida entre la posición anterior y la nueva.
 function movePlayerAxis(grid, x, y, delta, moveX, margin = 0.25) {
     const steps = Math.max(1, Math.ceil(Math.abs(delta) / 0.10));
     const step = delta / steps;
@@ -593,24 +776,24 @@ const LORE_NOTES = [
     },
     {
         code: "REGISTRO #02 - SEGURIDAD",
-        summary: "No corras cerca suyo. Apaga la linterna para ocultarte.",
+        summary: "Agachate [CUAD] o apaga la linterna para perder su rastro.",
         lines: [
             "INFORME DE GUARDIA - PASILLO SUR",
             "Reacciona al ruido de pisadas rapidas",
             "y al haz directo de las linternas.",
-            "Si sube tu pulso, apaga la luz [TRIANG]",
-            "y deja de correr: perdera tu rastro."
+            "Agachate [CUAD] o usa un escondite [X]",
+            "con la luz apagada: perdera tu rastro."
         ]
     },
     {
         code: "REGISTRO #03 - PROTOCOLO",
-        summary: "Ilumina sus ojos de frente para frenar su avance.",
+        summary: "Ilumina sus ojos o lanza un senuelo [L2] para desviarlo.",
         lines: [
             "OBSERVACION - COMPORTAMIENTO VISUAL",
-            "Aunque la luz lo atrae desde lejos,",
-            "apuntar directo a sus ojos lo frena.",
-            "Usalo solo para ganar distancia si te",
-            "acorrala en un pasillo. Cuida bateria."
+            "Apuntar directo a sus ojos lo frena,",
+            "y lanzar un SENUELO [L2] lo desvia",
+            "hacia el ruido del pasillo contrario.",
+            "Usalo si te bloquea un cuello de botella."
         ]
     },
     {
@@ -623,11 +806,54 @@ const LORE_NOTES = [
             "Cuando el panel pase a VERDE, corre",
             "hacia la salida. No mires atras."
         ]
+    },
+    {
+        code: "REGISTRO #05 - CALDERAS",
+        summary: "Valdez quedo atrapado tras sellar la esclusa de mantenimiento.",
+        lines: [
+            "BITACORA MANTENIMIENTO - NIVEL -2",
+            "Intentamos encerrar al sujeto en los",
+            "tuneles de vapor, pero rompio el panel.",
+            "Si encuentras a Valdez, activa la valvula",
+            "central y avanza hacia Contencion."
+        ]
+    },
+    {
+        code: "REGISTRO #06 - DRA. MORALES",
+        summary: "Los escondites bloquean su vision si mantienes la luz apagada.",
+        lines: [
+            "NOTA DE LABORATORIO - CONTROL",
+            "El Sujeto 04 caza por contraste de luz",
+            "y vibracion de pisadas. Los nichos de",
+            "mantenimiento son seguros siempre que",
+            "apagues la linterna antes de que pase."
+        ]
+    },
+    {
+        code: "REGISTRO #07 - PROYECTO 04",
+        summary: "El experimento de adaptacion en oscuridad colapso el 14/10.",
+        lines: [
+            "ARCHIVO CONFIDENCIAL - CONTENCION",
+            "El Sujeto 04 fue expuesto a aislamiento",
+            "total en el subsuelo durante 90 dias.",
+            "Cuando cayo la red electrica, escapo",
+            "de la camara ritual hacia los pasillos."
+        ]
+    },
+    {
+        code: "REGISTRO #08 - EVACUACION FINAL",
+        summary: "El ascensor de carga al Norte lleva directo a la superficie.",
+        lines: [
+            "PROTOCOLO FINAL - SALIDA SUPERFICIE",
+            "Coloca los ultimos 4 fusibles en el",
+            "pabellon y activa el ascensor Norte.",
+            "Una vez arriba, el Subsuelo 04 quedara",
+            "sellado permanentemente."
+        ]
     }
 ];
 
 const LORE_MESSAGES = LORE_NOTES.map(n => [n.code, ": ", n.summary].join(""));
-
 // --- MODULE: src/ai.js ---
 // IA de El Acechador con Pathfinding BFS sin asignaciones de memoria por cuadro
 // Normalizada por delta-time (dtScale) para velocidad idéntica en PS2 NTSC 60Hz y PAL 50Hz
@@ -768,7 +994,18 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     return bfsOutNode;
 }
 
-function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0, dtMs = 16.6667) {
+function alertStalkerToNoise(stalker, nx, ny, difficulty = 0) {
+    stalker.targetX = toF64(nx);
+    stalker.targetY = toF64(ny);
+    stalker.hasNextNode = false;
+    if (stalker.state === AI_PATROL || stalker.state === AI_INVESTIGATE) {
+        stalker.state = AI_INVESTIGATE;
+    }
+    const minAlert = (difficulty === 1) ? 240 : 210;
+    if (stalker.alertTimer < minAlert) stalker.alertTimer = minAlert;
+}
+
+function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0, dtMs = 16.6667, isCrouched = false, isHiding = false) {
     const px = toF64(player.x);
     const py = toF64(player.y);
     const sx = toF64(stalker.x);
@@ -786,15 +1023,22 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
     const flashVisible = player.flashlightOn && ((toF64(player.battery) - 0.0) > 0);
 
     const rangeBonus = isNightmare ? 1.8 : 0.0;
-    const baseDetect = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
+    let baseDetect = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
+    if (isCrouched && !isSprinting) {
+        baseDetect = flashVisible ? 7.4 : 2.1;
+    }
     const detectRange = baseDetect - (-rangeBonus);
 
     aiResult.chaseIntroStarted = false;
     aiResult.chaseHuntStarted = false;
     const stepMs = toF64(dtMs);
-    const spotted = los && ((distP - detectRange) < 0);
-    const heardSprint = isSprinting && ((distP - (11.0 - (-rangeBonus))) < 0);
-    const closeSense = (distP - (isNightmare ? 7.5 : 6.2)) < 0;
+    // Si el jugador está escondido con la linterna apagada, El Acechador no puede verlo
+    // salvo que ya estuviera persiguiéndolo a quemarropa (< 3.0 celdas).
+    const hiddenSafe = isHiding && !flashVisible && (stalker.state !== AI_HUNT || (distP - 3.0) >= 0);
+    const spotted = !hiddenSafe && los && ((distP - detectRange) < 0);
+    const heardSprint = !isHiding && isSprinting && ((distP - (11.0 - (-rangeBonus))) < 0);
+    const closeRadius = isCrouched ? (isNightmare ? 3.2 : 2.4) : (isNightmare ? 7.5 : 6.2);
+    const closeSense = !hiddenSafe && ((distP - closeRadius) < 0);
 
     if (stalker.state === AI_CHASE_INTRO) {
         // Fase de alerta de 7 segundos sincronizada con la intro de chase.ogg
@@ -839,7 +1083,9 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
     }
 
     if (stalker.state === AI_PATROL) {
-        const wp = WAYPOINTS[stalker.wpIdx];
+        const wps = (typeof getActiveChapter === "function" && getActiveChapter().waypoints) ? getActiveChapter().waypoints : WAYPOINTS;
+        if (stalker.wpIdx >= wps.length) stalker.wpIdx = 0;
+        const wp = wps[stalker.wpIdx];
         const wx = toF64(wp.x);
         const wy = toF64(wp.y);
         stalker.targetX = wx;
@@ -847,7 +1093,7 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
         const dwx = wx - sx;
         const dwy = wy - sy;
         if (((dwx * dwx - (-(dwy * dwy))) - 0.81) < 0) {
-            stalker.wpIdx = (stalker.wpIdx + 1) % WAYPOINTS.length;
+            stalker.wpIdx = (stalker.wpIdx + 1) % wps.length;
         }
     }
 
@@ -1211,8 +1457,8 @@ let bootSkipAudio = false;
 
 const BOOT_LOAD_STEPS = [
     { kind: "audio_iop",   label: "AUDIO: MODULOS IOP" },
-    { kind: "audio_amb",   label: "AUDIO: ambient.wav" },
-    { kind: "audio_chase", label: "AUDIO: chase.wav" },
+    { kind: "audio_amb",   label: "AUDIO: ambient.ogg" },
+    { kind: "audio_chase", label: "AUDIO: chase.ogg" },
     { kind: "audio_play",  label: "ENTRANDO AL MENU..." }
 ];
 
@@ -1230,6 +1476,8 @@ let hwStreamFailed = false;
 let hwLoadErrorMsg = "";
 let hwDrawFailed = false;
 let mapLoadPhase = 0;
+let hwLoadedChapterIdx = -1;
+const hwTexCache = {};
 
 const HW3D_STREAM_STEPS = [
     { kind: "init",    label: "MOTOR 3D (VU1 / CAMARA)" },
@@ -1246,6 +1494,27 @@ const HW3D_STREAM_STEPS = [
     { kind: "prop",    key: "breaker", obj: "assets/models/breaker.obj", tex: "assets/textures/breaker.png",  label: "ITEMS: DISYUNTOR" },
     { kind: "prop",    key: "note",    obj: "assets/models/note.obj",    tex: "assets/textures/note.png",     label: "ITEMS: NOTAS" }
 ];
+
+function prepareChapter3D(chapterIdx) {
+    const ch = CHAPTERS[chapterIdx] || CHAPTERS[0];
+    const p = ch.meshPrefix || "map_";
+    HW3D_STREAM_STEPS[1].obj = ["assets/models/", p, "floor.obj"].join("");
+    HW3D_STREAM_STEPS[2].obj = ["assets/models/", p, "ceiling.obj"].join("");
+    HW3D_STREAM_STEPS[3].obj = ["assets/models/", p, "walls_concrete.obj"].join("");
+    HW3D_STREAM_STEPS[4].obj = ["assets/models/", p, "walls_rust.obj"].join("");
+    HW3D_STREAM_STEPS[5].obj = ["assets/models/", p, "walls_ritual.obj"].join("");
+    HW3D_STREAM_STEPS[6].obj = ["assets/models/", p, "exit.obj"].join("");
+    HW3D_STREAM_STEPS[7].obj = ["assets/models/", p, "gates.obj"].join("");
+    hwStaticObjs = [];
+    hwGatesObj = null;
+    hwStreamStep = 0;
+    hwStreamDone = false;
+    hwStreamFailed = false;
+    hw3dReady = false;
+    hwStreamCooldown = 2;
+    hwLoadErrorMsg = "";
+    hwLoadedChapterIdx = chapterIdx;
+}
 
 const MAP_PCT_LABELS = [
     "0%   (0/13)",  "8%   (1/13)",  "15%  (2/13)", "23%  (3/13)",
@@ -1265,11 +1534,16 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
     if (!fileExistsSafe(objPath)) return null;
     try {
         let tex = null;
-        if (texPath && fileExistsSafe(texPath)) {
-            tex = new Image(texPath);
-            hkFixProto(tex, Image);
-            if (tex && typeof tex.optimize === "function") {
-                try { tex.optimize(); } catch (_) {}
+        if (texPath) {
+            if (hwTexCache[texPath]) {
+                tex = hwTexCache[texPath];
+            } else if (fileExistsSafe(texPath)) {
+                tex = new Image(texPath);
+                hkFixProto(tex, Image);
+                if (tex && typeof tex.optimize === "function") {
+                    try { tex.optimize(); } catch (_) {}
+                }
+                if (tex) hwTexCache[texPath] = tex;
             }
         }
         const data = tex ? new RenderData(objPath, tex) : new RenderData(objPath);
@@ -1288,7 +1562,7 @@ function loadHwMesh(objPath, texPath, accurateClip = false) {
             hkFixProto(obj, RenderObject);
             // Retener la textura solo después de crear el objeto: si falla la
             // carga, no dejamos imágenes/meshes huérfanos vivos hasta el final.
-            if (tex) hwKeptTextures.push(tex);
+            if (tex && hwKeptTextures.indexOf(tex) === -1) hwKeptTextures.push(tex);
             obj.position = { x: 0.0, y: 0.0, z: 0.0 };
             obj.rotation = { x: 0.0, y: 0.0, z: 0.0 };
         }
@@ -1355,8 +1629,9 @@ function buildHwEntityTransforms() {
     for (let i = 0; i < entities.length; i++) {
         const e = entities[i];
         let y = 0.55;
-        if (e.kind === "breaker") y = 0.0;
+        if (e.kind === "breaker" || e.kind === "locker" || e.kind === "npc") y = 0.0;
         else if (e.kind === "note") y = 0.04;
+        else if (e.kind === "decoy") y = 0.42;
         hwEntityTransforms.push({
             position: {
                 x: toF64(e.x) * WORLD_CELL_SIZE,
@@ -1385,10 +1660,10 @@ function stepBootLoad() {
         } else if (step.kind === "audio_amb") {
             if (!bootSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
                 const ambPath = resolveFirstExisting([
-                    "assets/audio/ambient.wav",
                     "assets/audio/ambient.ogg",
-                    "assets/ambient.wav",
-                    "assets/ambient.ogg"
+                    "assets/audio/ambient.wav",
+                    "assets/ambient.ogg",
+                    "assets/ambient.wav"
                 ]);
                 if (ambPath) {
                     try {
@@ -1402,8 +1677,8 @@ function stepBootLoad() {
         } else if (step.kind === "audio_chase") {
             if (!bootSkipAudio && GAME_SETTINGS.audioVolume > 0 && typeof Sound !== "undefined" && Sound && typeof Sound.Stream === "function") {
                 const chasePath = resolveFirstExisting([
-                    "assets/audio/chase.wav",
-                    "assets/audio/chase.ogg"
+                    "assets/audio/chase.ogg",
+                    "assets/audio/chase.wav"
                 ]);
                 if (chasePath) {
                     try {
@@ -1723,8 +1998,10 @@ function renderHardware3DWorld(
         Render.begin();
         // Camera.target conserva el desplazamiento del objetivo anterior y mueve
         // la posición de cámara. Por eso se fija la posición al final en cada frame.
-        Camera.target(camX + dirX * 4.0, WORLD_EYE_H, camZ + dirZ * 4.0);
-        Camera.position(camX, WORLD_EYE_H, camZ);
+        const camY = (player.eyeH !== undefined) ? toF64(player.eyeH) : WORLD_EYE_H;
+        const targetY = (player.pitchY !== undefined) ? fadd(camY, toF64(player.pitchY)) : camY;
+        Camera.target(camX + dirX * 4.0, targetY, camZ + dirZ * 4.0);
+        Camera.position(camX, camY, camZ);
         Camera.update();
 
         // Actualizar luz principal solo cuando cambia la linterna (cero spam a C por cuadro)
@@ -1752,15 +2029,21 @@ function renderHardware3DWorld(
         for (let i = 0; i < entities.length; i++) {
             const e = entities[i];
             if (e.taken) continue;
-            const prop = hwPropObjs[e.kind];
+            let prop = hwPropObjs[e.kind];
+            if (!prop) {
+                if (e.kind === "decoy") prop = hwPropObjs.battery;
+                else if (e.kind === "locker") prop = hwPropObjs.breaker;
+                else if (e.kind === "npc") prop = hwStalkerObj;
+            }
             if (!prop) continue;
             const dxC = toF64(e.x) - px;
             const dyC = toF64(e.y) - py;
             if ((dxC * dxC + dyC * dyC) > 81.0) continue;
             const pose = hwEntityTransforms[i];
             if (!pose) continue;
-            if (e.kind !== "breaker" && e.kind !== "note") pose.position.y = 0.55 + bobY;
-            pose.rotation.y = (e.kind === "breaker" || e.kind === "note") ? 0.0 : spinY;
+            const isStatic = (e.kind === "breaker" || e.kind === "note" || e.kind === "locker" || e.kind === "npc");
+            if (!isStatic) pose.position.y = (e.kind === "decoy" ? 0.42 : 0.55) + bobY;
+            pose.rotation.y = isStatic ? 0.0 : spinY;
             drawHwObject(prop,
                 pose.position.x, pose.position.y, pose.position.z,
                 pose.rotation.x, pose.rotation.y, pose.rotation.z);
@@ -2698,15 +2981,25 @@ const TITLE_ITEMS_NORMAL = [
     "OPCIONES Y VIDEO PS2",
     "CONTROLES DUALSHOCK 2",
     "EXPEDIENTE / HISTORIA",
-    "CREDITOS Y HARDWARE"
+    "CREDITOS Y HARDWARE",
+    "CINEMATICAS (TEST)"
 ];
 const TITLE_ITEMS_NIGHTMARE = [
     "NUEVA PARTIDA   < PESADILLA >",
     "OPCIONES Y VIDEO PS2",
     "CONTROLES DUALSHOCK 2",
     "EXPEDIENTE / HISTORIA",
-    "CREDITOS Y HARDWARE"
+    "CREDITOS Y HARDWARE",
+    "CINEMATICAS (TEST)"
 ];
+const CINEMATIC_MENU_ITEMS = [
+    { title: "01. CAP 1 - INTRO RECUPERADA",  meta: "44s | 7 PLANOS | Subsuelo 04" },
+    { title: "02. CAP 2 - TUNELES CALDERAS",  meta: "14s | 3 PLANOS | Nivel -2 y Valdez" },
+    { title: "03. CAP 3 - CONTENCION RITUAL", meta: "14s | 3 PLANOS | Origen Sujeto 04" },
+    { title: "04. FINAL - EVACUACION NORTE",  meta: "22s | 4 PLANOS | Escape a superficie" },
+    { title: "VOLVER AL MENU PRINCIPAL",      meta: "Regresar al titulo" }
+];
+const DECOY_HUD_LABELS = ["SEN:0", "SEN:1", "SEN:2", "SEN:3"];
 const LORE_TABS_OPEN = ["NOTA #01", "NOTA #02", "NOTA #03", "NOTA #04"];
 const LORE_TABS_LOCK = ["BLOQ #01", "BLOQ #02", "BLOQ #03", "BLOQ #04"];
 const PAUSE_REG_LABELS = ["REGISTROS (0/4)", "REGISTROS (1/4)", "REGISTROS (2/4)", "REGISTROS (3/4)", "REGISTROS (4/4)"];
@@ -2776,16 +3069,16 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     // Opciones del Menú Principal (cadenas estáticas sin concatenación por frame para QuickJS PS2)
     const items = GAME_SETTINGS.difficulty === 1 ? TITLE_ITEMS_NIGHTMARE : TITLE_ITEMS_NORMAL;
 
-    const listY = py + 100;
-    const rowH = 42;
+    const listY = py + 96;
+    const rowH = 38;
     for (let i = 0; i < items.length; i++) {
         const ry = listY + i * rowH;
         const selected = (i === cursor);
         if (selected) {
-            Draw.rect(px + 18, ry - 4, panelW - 36, 36, COL_SEL_BG);
-            Draw.rect(px + 18, ry - 4, 6, 36, COL_SEL_BAR);
+            Draw.rect(px + 18, ry - 3, panelW - 36, 32, COL_SEL_BG);
+            Draw.rect(px + 18, ry - 3, 6, 32, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(selected ? 0.84 : 0.78);
+        fnt.scale = Math.fround(selected ? 0.80 : 0.74);
         fnt.color = selected ? COL_GOLD : COL_WHITE;
         if (selected) {
             fnt.print(px + 32, ry + 2, ">");
@@ -2829,19 +3122,20 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
         { label: "AUDIO",          val: audioVal },
         { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
+        { label: "OMITIR INTRO",   val: GAME_SETTINGS.skipIntro ? "SI" : "NO" },
         { label: "GUARDAR",        val: "[X]" }
     ];
 
     const startY = py + 44;
-    const rowH = 33;
+    const rowH = 30;
     for (let i = 0; i < rows.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 14, ry - 3, panelW - 28, 30, COL_SEL_BG);
-            Draw.rect(px + 14, ry - 3, 5, 30, COL_SEL_BAR);
+            Draw.rect(px + 14, ry - 2, panelW - 28, 27, COL_SEL_BG);
+            Draw.rect(px + 14, ry - 2, 5, 27, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.75);
+        fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         fnt.print(px + 24, ry + 1, rows[i].label);
 
@@ -2874,24 +3168,25 @@ function drawControlsMenu(screenW, screenH, fnt) {
     drawPanel(px, py, panelW, panelH, "CONTROLES DUALSHOCK 2", fnt);
 
     const bindings = [
-        ["STICK IZQ / D-PAD",  "Caminar y moverse"],
+        ["STICK IZQ / D-PAD",  "Caminar (con inercia)"],
         ["STICK DER / L1-R1",  "Girar la camara"],
-        ["CIRCULO / CUAD.",    "Correr (usa stamina)"],
+        ["X (CRUZ)",           "Interactuar / Esconderse"],
+        ["CIRCULO / ABAJO+O",  "Correr / Giro rapido 180"],
+        ["CUADRADO",           "Agacharse (modo sigilo)"],
         ["TRIANGULO",          "Linterna ON / OFF"],
-        ["SELECT / L2",        "Abrir / cerrar mapa PDA"],
-        ["START",              "Pausar partida"],
-        ["R2",                 "Diagnostico tecnico"]
+        ["L2 / SELECT",        "Lanzar senuelo / Mapa PDA"],
+        ["START / R2",         "Pausa / Diagnostico PS2"]
     ];
 
-    let y = py + 46;
+    let y = py + 44;
     for (let i = 0; i < bindings.length; i++) {
-        Draw.rect(px + 14, y - 3, panelW - 28, 30, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
-        fnt.scale = Math.fround(0.74);
+        Draw.rect(px + 14, y - 2, panelW - 28, 27, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
+        fnt.scale = Math.fround(0.72);
         fnt.color = COL_GOLD;
         fnt.print(px + 20, y + 1, bindings[i][0]);
         fnt.color = COL_WHITE;
         fnt.print(px + 245, y + 1, bindings[i][1]);
-        y += 34;
+        y += 30;
     }
 
     fnt.scale = Math.fround(0.70);
@@ -2917,17 +3212,22 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
     const title = fromPause ? "REGISTROS RECOLECTADOS" : "EXPEDIENTE - SUBSUELO 04";
     drawPanel(px, py, panelW, panelH, title, fnt);
 
-    // Pestañas superiores para elegir nota 1..4
+    // Pestañas superiores en ventana de 4 (soporta 8 notas de campaña sin desbordar)
+    const tabPage = (selectedNoteIdx >= 4) ? 4 : 0;
     const tabW = ((panelW - 44) / 4) | 0;
-    for (let i = 0; i < LORE_NOTES.length; i++) {
-        const tx = px + 16 + i * (tabW + 4);
+    for (let slot = 0; slot < 4; slot++) {
+        const i = tabPage + slot;
+        if (i >= LORE_NOTES.length) break;
+        const tx = px + 16 + slot * (tabW + 4);
         const sel = (i === selectedNoteIdx);
         const unlocked = !fromPause || collectedNotes[i];
         Draw.rect(tx, py + 44, tabW, 28, sel ? COL_SEL_BG : rgba(20, 18, 24, 110));
         if (sel) Draw.rect(tx, py + 70, tabW, 2, COL_SEL_BAR);
         fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : (unlocked ? COL_WHITE : COL_MUTED);
-        fnt.print(tx + 8, py + 48, unlocked ? LORE_TABS_OPEN[i] : LORE_TABS_LOCK[i]);
+        const openLbl = ["NOTA #0", String(i + 1)].join("");
+        const lockLbl = ["BLOQ #0", String(i + 1)].join("");
+        fnt.print(tx + 8, py + 48, unlocked ? openLbl : lockLbl);
     }
 
     const note = LORE_NOTES[selectedNoteIdx];
@@ -2957,7 +3257,9 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
     Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_WHITE;
-    fnt.print(px + 18, footY, "[IZQ/DER] NOTA   [X/CIRCULO] VOLVER");
+    fnt.print(px + 18, footY, fromPause
+        ? "[IZQ/DER] NOTA   [X/CIRCULO] VOLVER"
+        : "[IZQ/DER] NOTA   [TRIANG.] VER INTRO   [X/O] VOLVER");
 }
 
 function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
@@ -3147,26 +3449,80 @@ function drawPadDisconnectedOverlay(screenW, screenH, fnt) {
     fnt.print(px + 20, py + 84, "Puerto 1 para continuar.");
 }
 
+function drawCinematicsMenu(screenW, screenH, cursor, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
+
+    const panelW = screenW - sx * 2 - 12;
+    const panelH = screenH - sy * 2 - 12;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, "CINEMATICAS (MODO TEST)", fnt);
+
+    fnt.scale = Math.fround(0.70);
+    fnt.color = COL_MUTED;
+    fnt.print(px + 20, py + 48, "Selecciona una secuencia para reproducirla (START 1s para omitir):");
+
+    const startY = py + 76;
+    const rowH = 52;
+    for (let i = 0; i < CINEMATIC_MENU_ITEMS.length; i++) {
+        const ry = startY + i * rowH;
+        const sel = (i === cursor);
+        const item = CINEMATIC_MENU_ITEMS[i];
+        Draw.rect(px + 16, ry - 3, panelW - 32, 46, sel ? COL_SEL_BG : rgba(18, 15, 22, 105));
+        if (sel) Draw.rect(px + 16, ry - 3, 6, 46, COL_SEL_BAR);
+
+        fnt.scale = Math.fround(sel ? 0.76 : 0.72);
+        fnt.color = sel ? COL_GOLD : COL_WHITE;
+        if (sel) {
+            fnt.print(px + 26, ry + 1, ">");
+            fnt.print(px + 46, ry + 1, item.title);
+        } else {
+            fnt.print(px + 42, ry + 1, item.title);
+        }
+
+        fnt.scale = Math.fround(0.70);
+        fnt.color = sel ? COL_CYAN : COL_MUTED;
+        fnt.print(px + 42, ry + 23, item.meta);
+    }
+
+    const footY = py + panelH - 34;
+    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.70);
+    fnt.color = COL_WHITE;
+    fnt.print(px + 18, footY, "[D-PAD] ELEGIR   [X] REPRODUCIR   [O] VOLVER");
+}
+
 // --- MODULE: src/cinematic.js ---
 // ============================================================================
 // Sistema de Cinemáticas Declarativo para HK Engine 1 (PS2 Real / AthenaEnv V4)
-// - Basado en datos (línea de tiempo declarativa: cámara, fundidos, subtítulos
-//   máquina de escribir, efectos VHS, entidades y cues de audio).
-// - CERO carga de recursos durante la reproducción (usa el mapa/entidades ya
-//   precargados en STATE_MAP_LOADING y la fuente FreeType activa).
-// - CERO asignaciones de objetos/arrays por frame en el bucle principal.
+// - Línea de tiempo declarativa: cámara 3D con altura (eyeH), cabeceo (pitchY),
+//   respiración handheld, cambios de cámara CCTV por plano, tarjetas de título,
+//   flashes de luz, fundidos, subtítulos máquina de escribir, efectos VHS,
+//   entidades con estado de IA y cues de audio / vibración.
+// - CERO carga de recursos durante la reproducción y CERO allocs por cuadro.
 // - Compatible con 3D VU1 y raycaster 2.5D, NTSC 60Hz y PAL 50Hz.
 // ============================================================================
 
 // Colores estáticos precomputados (alfa GS PS2: 0..128)
 const CIN_COL_BAR        = rgba(0, 0, 0, 128);
+const CIN_COL_BAR_TRIM   = rgba(58, 66, 78, 88);
+const CIN_COL_RETICLE    = rgba(175, 190, 208, 72);
 const CIN_COL_REC_DOT    = rgba(235, 32, 32, 128);
 const CIN_COL_REC_TXT    = rgba(240, 240, 245, 128);
 const CIN_COL_META_TXT   = rgba(175, 190, 205, 128);
-const CIN_COL_SUB_BG     = rgba(0, 0, 0, 96);
+const CIN_COL_SUB_BG     = rgba(4, 5, 9, 104);
 const CIN_COL_SUB_MAIN   = rgba(238, 240, 246, 128);
 const CIN_COL_SUB_WARN   = rgba(255, 215, 110, 128);
 const CIN_COL_SUB_ALERT  = rgba(255, 90, 85, 128);
+const CIN_COL_SUB_RULE0  = rgba(120, 138, 158, 110);
+const CIN_COL_SUB_RULE1  = rgba(240, 195, 85, 120);
+const CIN_COL_SUB_RULE2  = rgba(235, 55, 55, 124);
+const CIN_COL_TITLE_MAIN = rgba(244, 244, 248, 128);
+const CIN_COL_TITLE_RED  = rgba(242, 52, 52, 128);
+const CIN_COL_TITLE_GRN  = rgba(95, 242, 145, 128);
+const CIN_COL_TITLE_SUB  = rgba(190, 200, 214, 124);
 const CIN_COL_SKIP_BG    = rgba(18, 20, 26, 118);
 const CIN_COL_SKIP_FILL  = rgba(235, 55, 55, 128);
 const CIN_COL_SKIP_TXT   = rgba(210, 215, 224, 128);
@@ -3191,11 +3547,10 @@ const CIN_TC_LABELS = [
 ];
 
 // Ganchos documentados para futuros efectos ADPCM (.adp) en assets/audio/
-// Si un .adp no existe o no fue cargado en sfxBank, el disparo se ignora sin error.
 const CINEMATIC_AUDIO_HOOKS = {
-    vhs_static:    "assets/audio/vhs_static.adp",    // Ruido de cinta VHS al encender/cortar señal
-    power_down:    "assets/audio/power_down.adp",    // Caída eléctrica / apagón del sector
-    stalker_growl: "assets/audio/stalker_growl.adp"  // Respiración / gruñido lejano de El Acechador
+    vhs_static:    "assets/audio/vhs_static.adp",
+    power_down:    "assets/audio/power_down.adp",
+    stalker_growl: "assets/audio/stalker_growl.adp"
 };
 
 // Objetos reutilizables preasignados (cero allocaciones por frame en QuickJS)
@@ -3203,6 +3558,8 @@ const cinCamera = {
     x: toF64(10.0),
     y: toF64(1.8),
     ang: toF64(Math.PI * 0.5),
+    eyeH: toF64(WORLD_EYE_H),
+    pitchY: toF64(0.0),
     bobPhase: toF64(0.0),
     battery: toF64(100.0),
     flashlightOn: true,
@@ -3244,12 +3601,21 @@ const cinState = {
     skipFading: false,
     skipFadeAlpha: toF64(0.0),
     fadeAlpha: 0,
+    flashR: 0,
+    flashG: 0,
+    flashB: 0,
+    flashAlpha: 0,
     fov: toF64(0.90),
     flashIntensity: toF64(1.0),
     glitch: toF64(0.0),
     redBlink: toF64(0.0),
     shake: toF64(0.0),
     flickerFlash: toF64(0.0),
+    activeCamLabel: "",
+    stalkerLookAtCam: false,
+    titleMain: "",
+    titleSub: "",
+    titleStyle: 0,
     nextAudioIdx: 0,
     lastSubIdx: -1,
     lastSubChars: -1,
@@ -3262,8 +3628,6 @@ const cinState = {
     lowVramMode: false
 };
 
-// Consulta segura de VRAM libre antes de iniciar una cinemática (nunca por frame).
-// Recuerda que Screen.getFreeVRAM() sin argumentos en AthenaEnv devuelve VRAM USADA.
 function cinMeasureFreeVramKB() {
     try {
         if (typeof Screen !== "undefined" && Screen) {
@@ -3283,13 +3647,11 @@ function cinMeasureFreeVramKB() {
     return 1024;
 }
 
-// Interpolación suave cúbica (smoothstep) sin asignaciones
 function cinSmoothstep(t) {
     const c = clampF64(t, 0.0, 1.0);
     return c * c * (3.0 - 2.0 * c);
 }
 
-// Interpolación angular por el arco más corto (evita giros de 360 grados al cruzar +-PI)
 function cinLerpAngle(a0, a1, t) {
     const start = toF64(a0);
     let diff = toF64(a1) - start;
@@ -3299,7 +3661,6 @@ function cinLerpAngle(a0, a1, t) {
     return fadd(start, diff * t);
 }
 
-// Ruido pseudoaleatorio determinístico por enteros (0..255) sin allocaciones
 function cinHashByte(seed) {
     let x = (seed ^ 0x5bd1e995) | 0;
     x = Math.imul(x, 1597334677);
@@ -3321,12 +3682,18 @@ function startCinematic(sequence, onFinishState) {
     cinState.skipFading = false;
     cinState.skipFadeAlpha = toF64(0.0);
     cinState.fadeAlpha = 128;
+    cinState.flashAlpha = 0;
     cinState.fov = toF64(0.90);
     cinState.flashIntensity = toF64(1.0);
     cinState.glitch = toF64(0.0);
     cinState.redBlink = toF64(0.0);
     cinState.shake = toF64(0.0);
     cinState.flickerFlash = toF64(0.0);
+    cinState.activeCamLabel = sequence.cameraLabel || "";
+    cinState.stalkerLookAtCam = false;
+    cinState.titleMain = "";
+    cinState.titleSub = "";
+    cinState.titleStyle = 0;
     cinState.nextAudioIdx = 0;
     cinState.lastSubIdx = -1;
     cinState.lastSubChars = -1;
@@ -3336,28 +3703,26 @@ function startCinematic(sequence, onFinishState) {
     cinState.lastSecIdx = -1;
     cinState.cachedTcLabel = CIN_TC_LABELS[0];
 
-    // Medir VRAM libre una sola vez antes de arrancar: si queda poca (< 256 KB),
-    // reducimos adornos 2D para proteger la caché de glifos FreeType en PS2 real.
     const freeKb = cinMeasureFreeVramKB();
     cinState.vramChecked = true;
     cinState.lowVramMode = freeKb < 256;
 
-    // Inicializar cámara con el primer keyframe
     const kf0 = sequence.keyframes[0];
     cinCamera.x = toF64(kf0.x);
     cinCamera.y = toF64(kf0.y);
     cinCamera.ang = toF64(kf0.ang);
+    cinCamera.eyeH = toF64(kf0.eyeH !== undefined ? kf0.eyeH : WORLD_EYE_H);
+    cinCamera.pitchY = toF64(kf0.pitchY !== undefined ? kf0.pitchY : 0.0);
     cinCamera.bobPhase = toF64(0.0);
     cinCamera.battery = toF64(100.0);
     cinCamera.flashlightOn = (kf0.flashlight !== false);
+    if (kf0.cam) cinState.activeCamLabel = kf0.cam;
 
-    // Ocultar Acechador fuera del radio de culling hasta que la timeline lo invoque
     cinStalker.x = toF64(99.0);
     cinStalker.y = toF64(99.0);
     cinStalker.state = AI_PATROL;
     resetStalkerAnim(cinStalker, 99.0, 99.0);
 
-    // Forzar refresco de iluminación 3D al cambiar a cinemática
     hwLastFlashState = -1;
     triggerRumble(0, 0);
     switchState(STATE_CINEMATIC);
@@ -3372,18 +3737,19 @@ function finishCinematic() {
     cinState.skipHoldMs = toF64(0.0);
     cinState.cachedLine1 = "";
     cinState.cachedLine2 = "";
+    cinState.titleMain = "";
+    cinState.titleSub = "";
+    cinState.flashAlpha = 0;
 
-    // Devolver música ambiente y limpiar vibración / luces antes del gameplay
     setMusicTrack("ambient", false);
     triggerRumble(0, 0);
     hwLastFlashState = -1;
 
-    // Transición limpia hacia el spawn del jugador sin doble fundido brusco
     introFade = 36;
     switchState(target);
 }
 
-// Evalúa keyframes de cámara con interpolación suave (o corte instantáneo si snap: true)
+// Evalúa keyframes de cámara (posición, ángulo, altura eyeH, cabeceo pitchY, FOV y cámara activa)
 function cinEvalCamera(seq, tMs, frameTick) {
     const kfs = seq.keyframes;
     const len = kfs.length;
@@ -3401,8 +3767,14 @@ function cinEvalCamera(seq, tMs, frameTick) {
     let x = toF64(a.x);
     let y = toF64(a.y);
     let ang = toF64(a.ang);
+    let eyeH = toF64(a.eyeH !== undefined ? a.eyeH : WORLD_EYE_H);
+    let pitchY = toF64(a.pitchY !== undefined ? a.pitchY : 0.0);
     let fov = toF64(a.fov !== undefined ? a.fov : 0.90);
     let flashOn = (a.flashlight !== false);
+    const handheld = !!a.handheld;
+
+    if (a.cam) cinState.activeCamLabel = a.cam;
+    else cinState.activeCamLabel = seq.cameraLabel || "";
 
     if (b !== a && !b.snap) {
         const span = toF64(b.t) - toF64(a.t);
@@ -3411,21 +3783,34 @@ function cinEvalCamera(seq, tMs, frameTick) {
             x = fadd(x, (toF64(b.x) - x) * u);
             y = fadd(y, (toF64(b.y) - y) * u);
             ang = cinLerpAngle(ang, toF64(b.ang), u);
+            const eyeB = toF64(b.eyeH !== undefined ? b.eyeH : WORLD_EYE_H);
+            const pitchB = toF64(b.pitchY !== undefined ? b.pitchY : 0.0);
             const fovB = toF64(b.fov !== undefined ? b.fov : 0.90);
+            eyeH = fadd(eyeH, (eyeB - eyeH) * u);
+            pitchY = fadd(pitchY, (pitchB - pitchY) * u);
             fov = fadd(fov, (fovB - fov) * u);
         }
     }
 
-    // Aplicar micro-shake VHS (posicional + angular) sin crear objetos
+    // Respiración orgánica de cámara en mano (sin allocaciones, usando sin LUT del motor)
+    if (handheld) {
+        const phase = toF64(tMs * 0.0042);
+        eyeH = fadd(eyeH, Math.sin(phase) * 0.045);
+        ang = fadd(ang, Math.sin(phase * 0.65) * 0.012);
+    }
+
+    // Micro-shake VHS / impacto (posicional + angular + vertical)
     const shk = cinState.shake;
     if ((shk - 0.01) > 0) {
         const h1 = (cinHashByte(frameTick * 3 + 7) - 128) / 128.0;
         const h2 = (cinHashByte(frameTick * 5 + 19) - 128) / 128.0;
-        ang = fadd(ang, h1 * 0.032 * shk);
-        x = fadd(x, h2 * 0.025 * shk);
+        const h3 = (cinHashByte(frameTick * 9 + 41) - 128) / 128.0;
+        ang = fadd(ang, h1 * 0.030 * shk);
+        x = fadd(x, h2 * 0.022 * shk);
+        eyeH = fadd(eyeH, h3 * 0.028 * shk);
     }
 
-    // Parpadeo de linterna en momentos de interferencia fuerte
+    // Parpadeo eléctrico de linterna
     let fInt = toF64(1.0);
     if ((cinState.flickerFlash - 0.05) > 0) {
         const fh = cinHashByte(frameTick * 7 + 31);
@@ -3438,12 +3823,13 @@ function cinEvalCamera(seq, tMs, frameTick) {
     cinCamera.x = x;
     cinCamera.y = y;
     cinCamera.ang = ang;
+    cinCamera.eyeH = clampF64(eyeH, 0.55, 2.38);
+    cinCamera.pitchY = clampF64(pitchY, -1.20, 1.20);
     cinCamera.flashlightOn = flashOn;
     cinState.fov = fov;
     cinState.flashIntensity = fInt;
 }
 
-// Evalúa fundidos a negro / desde negro (rango GS 0..128)
 function cinEvalFade(seq, tMs) {
     let alpha = 0;
     const fades = seq.fades;
@@ -3470,7 +3856,54 @@ function cinEvalFade(seq, tMs) {
     cinState.fadeAlpha = alpha;
 }
 
-// Evalúa efectos VHS declarativos activos en el instante tMs
+function cinEvalFlashes(seq, tMs) {
+    let fa = 0;
+    let fr = 0, fg = 0, fb = 0;
+    const flashes = seq.flashes;
+    if (flashes) {
+        for (let i = 0; i < flashes.length; i++) {
+            const fl = flashes[i];
+            const t0 = toF64(fl.t0);
+            const t1 = toF64(fl.t1);
+            if ((tMs - t0) >= 0 && (tMs - t1) <= 0) {
+                const span = t1 - t0;
+                const u = (span > 1.0) ? clampF64((tMs - t0) / span, 0.0, 1.0) : 1.0;
+                // Pulso rápido de subida (primer 20%) y decaimiento suave
+                const env = (u < 0.2) ? (u / 0.2) : ((1.0 - u) / 0.8);
+                const a = ((toF64(fl.maxAlpha || 80) * clampF64(env, 0.0, 1.0)) | 0);
+                if (a > fa) {
+                    fa = a;
+                    fr = fl.r | 0;
+                    fg = fl.g | 0;
+                    fb = fl.b | 0;
+                }
+            }
+        }
+    }
+    if (fa > 128) fa = 128;
+    cinState.flashAlpha = fa;
+    cinState.flashR = fr;
+    cinState.flashG = fg;
+    cinState.flashB = fb;
+}
+
+function cinEvalTitles(seq, tMs) {
+    cinState.titleMain = "";
+    cinState.titleSub = "";
+    cinState.titleStyle = 0;
+    const list = seq.titles;
+    if (!list) return;
+    for (let i = 0; i < list.length; i++) {
+        const ti = list[i];
+        if ((tMs - toF64(ti.t0)) >= 0 && (tMs - toF64(ti.t1)) <= 0) {
+            cinState.titleMain = ti.title || "";
+            cinState.titleSub = ti.subtitle || "";
+            cinState.titleStyle = ti.style | 0;
+            return;
+        }
+    }
+}
+
 function cinEvalVhs(seq, tMs) {
     let glitch = toF64(0.0);
     let redBlink = toF64(0.0);
@@ -3496,9 +3929,9 @@ function cinEvalVhs(seq, tMs) {
     cinState.flickerFlash = flicker;
 }
 
-// Evalúa aparición y desplazamiento de entidades (El Acechador) sin crear objetos
 function cinEvalEntities(seq, tMs) {
     let stalkerVisible = false;
+    cinState.stalkerLookAtCam = false;
     const list = seq.entities;
     if (list) {
         for (let i = 0; i < list.length; i++) {
@@ -3508,6 +3941,8 @@ function cinEvalEntities(seq, tMs) {
                 const u = (span > 1.0) ? clampF64((tMs - toF64(ev.t0)) / span, 0.0, 1.0) : 1.0;
                 cinStalker.x = fadd(toF64(ev.x0), (toF64(ev.x1) - toF64(ev.x0)) * u);
                 cinStalker.y = fadd(toF64(ev.y0), (toF64(ev.y1) - toF64(ev.y0)) * u);
+                cinStalker.state = (ev.state !== undefined) ? ev.state : AI_PATROL;
+                cinState.stalkerLookAtCam = !!ev.lookAtCam;
                 stalkerVisible = true;
                 break;
             }
@@ -3516,11 +3951,11 @@ function cinEvalEntities(seq, tMs) {
     if (!stalkerVisible) {
         cinStalker.x = toF64(99.0);
         cinStalker.y = toF64(99.0);
+        cinStalker.state = AI_PATROL;
         cinStalker.animYawInit = false;
     }
 }
 
-// Dispara cues de audio una única vez cuando la línea de tiempo los cruza
 function cinEvalAudioCues(seq, tMs) {
     const cues = seq.audioCues;
     if (!cues) return;
@@ -3533,14 +3968,13 @@ function cinEvalAudioCues(seq, tMs) {
         } else if (cue.type === "sfx") {
             playSfx(cue.name, cue.pan || 0, cue.vol !== undefined ? cue.vol : 0.85);
         } else if (cue.type === "hook") {
-            // Gancho seguro para futuros .adp listados en CINEMATIC_AUDIO_HOOKS:
-            // si el desarrollador agrega el sonido a sfxBank, sonará automáticamente.
             playSfx(cue.name, cue.pan || 0, cue.vol !== undefined ? cue.vol : 0.8);
+        } else if (cue.type === "rumble") {
+            triggerRumble(cue.ms || 140, cue.power !== undefined ? cue.power : 1);
         }
     }
 }
 
-// Evalúa subtítulos con efecto máquina de escribir (solo recorta string al avanzar carácter)
 function cinEvalSubtitles(seq, tMs) {
     const subs = seq.subtitles;
     if (!subs) return;
@@ -3568,7 +4002,7 @@ function cinEvalSubtitles(seq, tMs) {
     const l1 = sub.line1 || "";
     const l2 = sub.line2 || "";
     const totalChars = l1.length + l2.length;
-    const cps = sub.cps || 26;
+    const cps = sub.cps || 28;
     const localMs = tMs - toF64(sub.t0);
     let shown = ((localMs * cps) / 1000.0) | 0;
     if (shown < 0) shown = 0;
@@ -3588,25 +4022,22 @@ function cinEvalSubtitles(seq, tMs) {
     }
 }
 
-// Dibuja el HUD VHS, efectos de interferencia, subtítulos, fundido y barra de salto
 function cinDrawOverlay(screenW, screenH, frameTick, fnt) {
     const seq = cinState.seq;
     const safeX = GAME_SETTINGS.crtSafe ? 28 : 12;
     const safeY = GAME_SETTINGS.crtSafe ? 18 : 8;
     const barH = GAME_SETTINGS.crtSafe ? 50 : 42;
 
-    // 1. Efectos VHS reutilizando primitivas livianas del motor (solo si overlays activos)
+    // 1. Efectos VHS y alarma de emergencia
     if (GAME_SETTINGS.overlays) {
         const g = cinState.glitch;
         const rb = cinState.redBlink;
 
-        // Línea de barrido VHS constante
         if (!cinState.lowVramMode) {
             const scanY = (frameTick * 4) % screenH;
             Draw.rect(0, scanY, screenW, 2, CIN_COL_SCANLINE);
         }
 
-        // Bandas de interferencia / glitch proporcionales a cinState.glitch
         if ((g - 0.05) > 0) {
             const bands = ((g - 0.55) > 0) ? 3 : ((g - 0.25) > 0 ? 2 : 1);
             for (let b = 0; b < bands; b++) {
@@ -3618,7 +4049,6 @@ function cinDrawOverlay(screenW, screenH, frameTick, fnt) {
             }
         }
 
-        // Parpadeo de luces de emergencia rojas en bordes
         if ((rb - 0.05) > 0 && ((frameTick & 15) < 7)) {
             let rAlpha = (rb * 82.0) | 0;
             if (rAlpha > 90) rAlpha = 90;
@@ -3628,13 +4058,31 @@ function cinDrawOverlay(screenW, screenH, frameTick, fnt) {
             Draw.rect(0, barH, 8, screenH - (barH << 1), rgba(210, 18, 22, rAlpha >> 1));
             Draw.rect(screenW - 8, barH, 8, screenH - (barH << 1), rgba(210, 18, 22, rAlpha >> 1));
         }
+
+        // Esquinas de visor CCTV minimalistas (solo fuera de lowVramMode)
+        if (!cinState.lowVramMode) {
+            const rx0 = safeX;
+            const rx1 = screenW - safeX;
+            const ry0 = barH + 10;
+            const ry1 = screenH - barH - 10;
+            Draw.rect(rx0, ry0, 18, 2, CIN_COL_RETICLE);
+            Draw.rect(rx0, ry0, 2, 14, CIN_COL_RETICLE);
+            Draw.rect(rx1 - 18, ry0, 18, 2, CIN_COL_RETICLE);
+            Draw.rect(rx1 - 2, ry0, 2, 14, CIN_COL_RETICLE);
+            Draw.rect(rx0, ry1 - 2, 18, 2, CIN_COL_RETICLE);
+            Draw.rect(rx0, ry1 - 14, 2, 14, CIN_COL_RETICLE);
+            Draw.rect(rx1 - 18, ry1 - 2, 18, 2, CIN_COL_RETICLE);
+            Draw.rect(rx1 - 2, ry1 - 14, 2, 14, CIN_COL_RETICLE);
+        }
     }
 
-    // 2. Bandas cinematográficas letterbox (arriba y abajo)
+    // 2. Bandas cinematográficas letterbox con filete metálico sutil
     Draw.rect(0, 0, screenW, barH, CIN_COL_BAR);
     Draw.rect(0, screenH - barH, screenW, barH, CIN_COL_BAR);
+    Draw.rect(0, barH, screenW, 1, CIN_COL_BAR_TRIM);
+    Draw.rect(0, screenH - barH - 1, screenW, 1, CIN_COL_BAR_TRIM);
 
-    // 3. Cabecera VHS: indicador parpadeante REC + timecode + identificador de cámara
+    // 3. Cabecera CCTV: REC + timecode + cámara dinámica por plano + fecha
     const recOn = ((frameTick % 48) < 28);
     if (recOn) {
         Draw.rect(safeX, safeY + 5, 10, 10, CIN_COL_REC_DOT);
@@ -3653,32 +4101,37 @@ function cinDrawOverlay(screenW, screenH, frameTick, fnt) {
 
     fnt.scale = Math.fround(0.66);
     fnt.color = CIN_COL_META_TXT;
-    if (seq.cameraLabel) {
-        fnt.print((screenW >> 1) - 110, safeY + 2, seq.cameraLabel);
+    if (cinState.activeCamLabel) {
+        fnt.print((screenW >> 1) - 125, safeY + 2, cinState.activeCamLabel);
     }
     if (seq.dateLabel) {
-        fnt.print(screenW - safeX - 168, safeY + 2, seq.dateLabel);
+        fnt.print(screenW - safeX - 154, safeY + 2, seq.dateLabel);
     }
 
-    // 4. Subtítulos máquina de escribir sobre el borde inferior (área segura CRT)
+    // 4. Subtítulos máquina de escribir sobre el borde inferior
     if (cinState.cachedLine1.length > 0) {
-        const subH = cinState.cachedLine2.length > 0 ? 52 : 30;
-        const subY = screenH - barH - subH - 8;
+        const subH = cinState.cachedLine2.length > 0 ? 54 : 32;
+        const subY = screenH - barH - subH - 10;
         const subW = screenW - (safeX << 1);
         Draw.rect(safeX, subY, subW, subH, CIN_COL_SUB_BG);
+
+        let ruleCol = CIN_COL_SUB_RULE0;
+        if (cinState.cachedColorKind === 2) ruleCol = CIN_COL_SUB_RULE2;
+        else if (cinState.cachedColorKind === 1) ruleCol = CIN_COL_SUB_RULE1;
+        Draw.rect(safeX, subY, subW, 2, ruleCol);
 
         fnt.scale = Math.fround(0.70);
         if (cinState.cachedColorKind === 2) fnt.color = CIN_COL_SUB_ALERT;
         else if (cinState.cachedColorKind === 1) fnt.color = CIN_COL_SUB_WARN;
         else fnt.color = CIN_COL_SUB_MAIN;
 
-        fnt.print(safeX + 10, subY + 4, cinState.cachedLine1);
+        fnt.print(safeX + 12, subY + 6, cinState.cachedLine1);
         if (cinState.cachedLine2.length > 0) {
-            fnt.print(safeX + 10, subY + 26, cinState.cachedLine2);
+            fnt.print(safeX + 12, subY + 28, cinState.cachedLine2);
         }
     }
 
-    // 5. Indicador y barra de progreso para omitir manteniendo START apretado
+    // 5. Indicador y barra de progreso para omitir manteniendo START
     const holdTarget = toF64(seq.skipHoldMs || 1200.0);
     const skipY = screenH - barH + 10;
     fnt.scale = Math.fround(0.64);
@@ -3696,9 +4149,44 @@ function cinDrawOverlay(screenW, screenH, frameTick, fnt) {
         }
     }
 
-    // 6. Fundido a negro / desde negro (capa superior)
+    // 6. Flash de luz / corte eléctrico (sobre la escena, debajo del fundido negro)
+    if (cinState.flashAlpha > 0) {
+        Draw.rect(0, 0, screenW, screenH, rgba(cinState.flashR, cinState.flashG, cinState.flashB, cinState.flashAlpha));
+    }
+
+    // 7. Fundido a negro / desde negro
     if (cinState.fadeAlpha > 0) {
         Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 0, cinState.fadeAlpha));
+    }
+
+    // 8. Tarjetas de título editoriales (sobre el fundido para aperturas/cierres limpios)
+    if (cinState.titleMain.length > 0) {
+        const cy = (screenH >> 1) - 24;
+        const ruleW = 240;
+        const ruleX = (screenW - ruleW) >> 1;
+        let tCol = CIN_COL_TITLE_MAIN;
+        let rCol = CIN_COL_SUB_RULE0;
+        if (cinState.titleStyle === 1) {
+            tCol = CIN_COL_TITLE_RED;
+            rCol = CIN_COL_SUB_RULE2;
+        } else if (cinState.titleStyle === 2) {
+            tCol = CIN_COL_TITLE_GRN;
+            rCol = rgba(85, 225, 130, 120);
+        }
+        const approxW = cinState.titleMain.length * 14;
+        const tx = Math.max(safeX, (screenW - approxW) >> 1);
+        fnt.scale = Math.fround(1.02);
+        fnt.color = tCol;
+        fnt.print(tx, cy - 12, cinState.titleMain);
+        Draw.rect(ruleX, cy + 28, ruleW, 2, rCol);
+
+        if (cinState.titleSub.length > 0) {
+            const subApproxW = cinState.titleSub.length * 9;
+            const sx = Math.max(safeX, (screenW - subApproxW) >> 1);
+            fnt.scale = Math.fround(0.72);
+            fnt.color = CIN_COL_TITLE_SUB;
+            fnt.print(sx, cy + 38, cinState.titleSub);
+        }
     }
 }
 
@@ -3713,7 +4201,6 @@ function updateAndRenderCinematic(screenW, screenH, dtMs, dtScale, frameTick, pa
     const stepMs = toF64(dtMs);
     cinState.elapsedMs = fadd(cinState.elapsedMs, stepMs);
 
-    // Control de salto manteniendo START apretado
     const holdTarget = toF64(seq.skipHoldMs || 1200.0);
     if (!cinState.skipFading) {
         if (padObj.pressed(Pads.START)) {
@@ -3733,7 +4220,6 @@ function updateAndRenderCinematic(screenW, screenH, dtMs, dtScale, frameTick, pa
         }
     }
 
-    // Verificar fin natural de la secuencia
     if ((cinState.elapsedMs - toF64(seq.durationMs)) >= 0) {
         finishCinematic();
         return;
@@ -3743,16 +4229,16 @@ function updateAndRenderCinematic(screenW, screenH, dtMs, dtScale, frameTick, pa
     cinEvalVhs(seq, tMs);
     cinEvalCamera(seq, tMs, frameTick);
     cinEvalEntities(seq, tMs);
-    updateStalkerAnim(cinStalker, cinCamera.x, cinCamera.y, dtScale, false, false);
+    updateStalkerAnim(cinStalker, cinCamera.x, cinCamera.y, dtScale, cinState.stalkerLookAtCam, false);
     cinEvalFade(seq, tMs);
+    cinEvalFlashes(seq, tMs);
+    cinEvalTitles(seq, tMs);
     cinEvalAudioCues(seq, tMs);
     cinEvalSubtitles(seq, tMs);
 
-    // Renderizar el mundo reutilizando el mismo pipeline 3D VU1 / 2.5D del gameplay.
-    // mapAnim = 1.0 oculta el viewmodel de la linterna en 2.5D sin cambiar firmas.
     render3DWorld(
         screenW, screenH, worldGrid, cinCamera, cinStalker, entities,
-        cinState.redBlink * 0.75, frameTick, false,
+        cinState.redBlink * 0.75, frameTick, !!seq.exitOpen,
         cinState.fov, cinState.flashIntensity, 1.0, 0.0
     );
 
@@ -3760,128 +4246,360 @@ function updateAndRenderCinematic(screenW, screenH, dtMs, dtScale, frameTick, pa
 }
 
 // ============================================================================
-// CINEMÁTICA INTRODUCTORIA: "SUBSUELO 04 - CINTA RECUPERADA" (44 segundos)
-// Coherente con BASE_MAP (20x20) y LORE_NOTES #01..#04 (src/map.js).
-// Todas las coordenadas de cámara verificadas en celdas transitables (0).
+// CINEMÁTICA 01: "SUBSUELO 04 - CINTA RECUPERADA" (44 segundos, 7 planos)
+// Recorre los 5 hitos reales de BASE_MAP: Compuerta Norte (4), Rejas Oeste (5),
+// Disyuntor Rojo (10,11.5), Zona Ritual Sur (3 + fusible) y Pasillo Fila 10.
+// Todas las coordenadas de cámara validadas en celdas transitables (0).
 // ============================================================================
 const CINEMATIC_INTRO = {
     id: "intro_subsuelo04",
     durationMs: 44000.0,
     skipHoldMs: 1200.0,
-    cameraLabel: "CAM-04 // SUBSUELO 04",
+    chapterIdx: 0,
+    exitOpen: false,
+    cameraLabel: "CAM-01 // COMPUERTA NORTE",
     dateLabel: "14/10 02:14",
 
     keyframes: [
-        // Plano 1 (0s..9s): Compuerta blindada Norte sellada (celdas 9..10, 0)
-        { t: 0.0,     x: 10.0, y: 2.2,  ang: -1.5708, fov: 0.90, flashlight: true,  snap: true  },
-        { t: 9000.0,  x: 10.0, y: 2.9,  ang: -1.4200, fov: 0.90, flashlight: true,  snap: false },
+        // Plano 1 (0s..6.2s): Apertura con grúa CCTV alta descendiendo sobre Compuerta Norte sellada
+        { t: 0.0,     x: 10.0, y: 2.75, ang: -1.5708, eyeH: 2.22, pitchY: -0.58, fov: 0.88, flashlight: true,  snap: true,  cam: "CAM-01 // COMPUERTA NORTE" },
+        { t: 6200.0,  x: 10.0, y: 1.85, ang: -1.5708, eyeH: 1.48, pitchY:  0.08, fov: 0.92, flashlight: true,  snap: false, cam: "CAM-01 // COMPUERTA NORTE" },
 
-        // Plano 2 (9s..18s): Reja de seguridad Oeste trabada tras el apagón (celda 5, 8)
-        { t: 9001.0,  x: 8.6,  y: 8.5,  ang:  3.1416, fov: 0.90, flashlight: true,  snap: true  },
-        { t: 18000.0, x: 6.7,  y: 8.5,  ang:  3.0400, fov: 0.90, flashlight: true,  snap: false },
+        // Plano 2 (6.2s..12.6s): Travelling lateral CCTV hacia las rejas magnéticas Oeste (5, 8)
+        { t: 6201.0,  x: 8.9,  y: 8.50, ang:  3.1416, eyeH: 2.15, pitchY: -0.42, fov: 0.90, flashlight: true,  snap: true,  cam: "CAM-02 // REJAS OESTE" },
+        { t: 12600.0, x: 6.5,  y: 8.50, ang:  3.0600, eyeH: 1.72, pitchY: -0.18, fov: 0.88, flashlight: true,  snap: false, cam: "CAM-02 // REJAS OESTE" },
 
-        // Plano 3 (18s..27s): Paneo sobre el Disyuntor Rojo central (10.0, 11.5) desde fila 10 libre
-        { t: 18001.0, x: 8.6,  y: 10.4, ang:  0.6650, fov: 0.90, flashlight: true,  snap: true  },
-        { t: 27000.0, x: 11.3, y: 10.4, ang:  2.4400, fov: 0.90, flashlight: true,  snap: false },
+        // Plano 3 (12.6s..19.2s): Paneo cinematográfico sobre el Disyuntor Rojo central (10.0, 11.5)
+        { t: 12601.0, x: 8.4,  y: 10.4, ang:  0.6400, eyeH: 1.12, pitchY: -0.18, fov: 0.90, flashlight: true,  snap: true,  cam: "CAM-03 // DISYUNTOR CENTRAL" },
+        { t: 19200.0, x: 11.6, y: 10.4, ang:  2.4800, eyeH: 1.78, pitchY: -0.34, fov: 0.86, flashlight: true,  snap: false, cam: "CAM-03 // DISYUNTOR CENTRAL" },
 
-        // Plano 4 (27s..37.5s): Pasillo transversal fila 10 — aparición lejana de El Acechador
-        { t: 27001.0, x: 5.5,  y: 10.5, ang:  0.0000, fov: 0.90, flashlight: true,  snap: true  },
-        { t: 37500.0, x: 6.9,  y: 10.5, ang:  0.0250, fov: 0.92, flashlight: true,  snap: false },
+        // Plano 4 (19.2s..25.4s): Travelling alto CCTV cruzando la Zona Ritual Sur (fila 16 libre) hacia el fusible (10.0, 17.5)
+        { t: 19201.0, x: 8.50, y: 16.40, ang:  0.6400, eyeH: 2.22, pitchY: -0.50, fov: 0.90, flashlight: true,  snap: true,  cam: "CAM-04 // ZONA RITUAL SUR" },
+        { t: 25400.0, x: 11.40, y: 16.40, ang:  2.4200, eyeH: 1.88, pitchY: -0.36, fov: 0.84, flashlight: true,  snap: false, cam: "CAM-04 // ZONA RITUAL SUR" },
 
-        // Plano 5 (37.5s..44s): Corte de señal y enlace directo al punto de inicio del jugador
-        { t: 37501.0, x: 10.0, y: 1.65, ang:  1.5708, fov: 0.90, flashlight: true,  snap: true  },
-        { t: 44000.0, x: 10.0, y: 1.80, ang:  1.5708, fov: 0.90, flashlight: true,  snap: false }
+        // Plano 5 (25.4s..32.6s): Contrapicado tenso en pasillo transversal — surge El Acechador
+        { t: 25401.0, x: 5.5,  y: 10.5, ang:  0.0000, eyeH: 0.96, pitchY:  0.24, fov: 0.90, flashlight: true,  snap: true,  handheld: true, cam: "CAM-05 // PASILLO CENTRAL" },
+        { t: 32600.0, x: 6.7,  y: 10.5, ang:  0.0150, eyeH: 1.04, pitchY:  0.20, fov: 0.86, flashlight: true,  snap: false, handheld: true, cam: "CAM-05 // PASILLO CENTRAL" },
+
+        // Plano 6 (32.6s..37.6s): El Acechador fija la vista y carga — retroceso brusco y pérdida de señal
+        { t: 32601.0, x: 6.7,  y: 10.5, ang:  0.0150, eyeH: 1.04, pitchY:  0.22, fov: 0.86, flashlight: true,  snap: false, handheld: true, cam: "SENAL INESTABLE // CAM-05" },
+        { t: 37600.0, x: 5.2,  y: 10.5, ang: -0.0200, eyeH: 0.90, pitchY:  0.32, fov: 0.78, flashlight: true,  snap: false, handheld: true, cam: "SENAL INESTABLE // CAM-05" },
+
+        // Plano 7 (37.6s..44.0s): Recuperación de enlace y match-cut exacto al spawn del jugador (10.0, 1.8)
+        { t: 37601.0, x: 10.0, y: 1.70, ang:  1.5708, eyeH: 1.38, pitchY: -0.14, fov: 0.90, flashlight: true,  snap: true,  handheld: true, cam: "ENLACE DIRECTO // SUBSUELO 04" },
+        { t: 44000.0, x: 10.0, y: 1.80, ang:  1.5708, eyeH: 1.55, pitchY:  0.00, fov: 0.90, flashlight: true,  snap: false, handheld: false, cam: "ENLACE DIRECTO // SUBSUELO 04" }
+    ],
+
+    titles: [
+        { t0: 200.0,   t1: 2300.0,  title: "HK ENTERTAINMENT",   subtitle: "REGISTRO RECUPERADO - 14/10", style: 0 },
+        { t0: 37700.0, t1: 39600.0, title: "SUBSUELO 04",        subtitle: "EL ACECHADOR",                style: 1 }
     ],
 
     fades: [
-        // Fundido inicial desde negro
-        { t0: 0.0,     t1: 2400.0,  from: 128, to: 0   },
-        // Micro-corte negro al perder señal tras ver a El Acechador
-        { t0: 37200.0, t1: 37700.0, from: 0,   to: 128 },
-        { t0: 37700.0, t1: 38600.0, from: 128, to: 128 },
-        { t0: 38600.0, t1: 40000.0, from: 128, to: 0   },
-        // Cierre suave hacia el inicio del control del jugador
-        { t0: 43300.0, t1: 44000.0, from: 0,   to: 48  }
+        { t0: 0.0,     t1: 2400.0,  from: 128, to: 128 },
+        { t0: 2400.0,  t1: 3700.0,  from: 128, to: 0   },
+        { t0: 37300.0, t1: 37650.0, from: 0,   to: 128 },
+        { t0: 37650.0, t1: 39700.0, from: 128, to: 128 },
+        { t0: 39700.0, t1: 41000.0, from: 128, to: 0   },
+        { t0: 43400.0, t1: 44000.0, from: 0,   to: 44  }
+    ],
+
+    flashes: [
+        { t0: 6150.0,  t1: 6450.0,  r: 220, g: 230, b: 245, maxAlpha: 42 },
+        { t0: 12550.0, t1: 12850.0, r: 220, g: 230, b: 245, maxAlpha: 40 },
+        { t0: 19150.0, t1: 19450.0, r: 210, g: 35,  b: 35,  maxAlpha: 46 },
+        { t0: 32550.0, t1: 33000.0, r: 235, g: 25,  b: 25,  maxAlpha: 72 },
+        { t0: 37200.0, t1: 37650.0, r: 245, g: 245, b: 255, maxAlpha: 96 }
     ],
 
     vhsEffects: [
-        // Arranque de cinta VHS
-        { t0: 0.0,     t1: 2600.0,  glitch: 0.70, redBlink: 0.35, shake: 0.12, flickerFlash: 0.15 },
-        // Cortes entre cámaras
-        { t0: 8800.0,  t1: 9500.0,  glitch: 0.65, redBlink: 0.45, shake: 0.18, flickerFlash: 0.0  },
-        { t0: 17800.0, t1: 18500.0, glitch: 0.60, redBlink: 0.40, shake: 0.16, flickerFlash: 0.0  },
-        // Alarma roja tenue en sector de rejas
-        { t0: 9500.0,  t1: 17800.0, glitch: 0.12, redBlink: 0.42, shake: 0.04, flickerFlash: 0.0  },
-        // Tensión creciente con El Acechador a lo lejos
-        { t0: 27000.0, t1: 33000.0, glitch: 0.38, redBlink: 0.65, shake: 0.22, flickerFlash: 0.28 },
-        { t0: 33000.0, t1: 37600.0, glitch: 0.88, redBlink: 0.95, shake: 0.68, flickerFlash: 0.55 },
-        // Recuperación de señal
-        { t0: 38600.0, t1: 40400.0, glitch: 0.45, redBlink: 0.25, shake: 0.10, flickerFlash: 0.15 }
+        { t0: 2400.0,  t1: 4200.0,  glitch: 0.65, redBlink: 0.30, shake: 0.10, flickerFlash: 0.15 },
+        { t0: 6000.0,  t1: 6600.0,  glitch: 0.68, redBlink: 0.45, shake: 0.16, flickerFlash: 0.0  },
+        { t0: 6600.0,  t1: 12400.0, glitch: 0.12, redBlink: 0.40, shake: 0.04, flickerFlash: 0.0  },
+        { t0: 12400.0, t1: 13000.0, glitch: 0.62, redBlink: 0.35, shake: 0.15, flickerFlash: 0.0  },
+        { t0: 19000.0, t1: 19700.0, glitch: 0.72, redBlink: 0.60, shake: 0.22, flickerFlash: 0.20 },
+        { t0: 25400.0, t1: 32600.0, glitch: 0.36, redBlink: 0.62, shake: 0.20, flickerFlash: 0.26 },
+        { t0: 32600.0, t1: 37600.0, glitch: 0.92, redBlink: 1.00, shake: 0.74, flickerFlash: 0.58 },
+        { t0: 39700.0, t1: 41200.0, glitch: 0.42, redBlink: 0.20, shake: 0.10, flickerFlash: 0.12 }
     ],
 
     entities: [
-        // Silueta de El Acechador avanzando lentamente por el pasillo fila 10 (14.5 -> 11.2)
-        { t0: 27200.0, t1: 37500.0, kind: "stalker", x0: 14.5, y0: 10.5, x1: 11.2, y1: 10.5 }
+        // Paso pesado de patrulla emergiendo desde el extremo Este del pasillo fila 10
+        { t0: 25600.0, t1: 32600.0, kind: "stalker", state: AI_PATROL, lookAtCam: false, x0: 14.4, y0: 10.5, x1: 10.9, y1: 10.5 },
+        // Detección y embestida agresiva directa hacia la cámara
+        { t0: 32601.0, t1: 37600.0, kind: "stalker", state: AI_HUNT,   lookAtCam: true,  x0: 10.9, y0: 10.5, x1: 7.4,  y1: 10.5 }
     ],
 
     subtitles: [
         {
-            t0: 700.0, t1: 4500.0, cps: 28, colorKind: 1,
-            line1: "14/10 - TURNO NOCHE // CINTA RECUPERADA",
-            line2: "Registro automatico de emergencia - Subsuelo 04."
+            t0: 2700.0, t1: 6000.0, cps: 30, colorKind: 1,
+            line1: "APAGON TOTAL // COMPUERTA NORTE SELLADA",
+            line2: "Se requieren los 4 FUSIBLES para liberar el acceso."
         },
         {
-            t0: 4700.0, t1: 8800.0, cps: 28, colorKind: 0,
-            line1: "Tras el apagon, la compuerta blindada Norte",
-            line2: "quedo sellada. Requiere los 4 FUSIBLES."
+            t0: 6600.0, t1: 12200.0, cps: 28, colorKind: 0,
+            line1: "Las trabas magneticas bloquearon las rejas",
+            line2: "de los sectores Este y Oeste del subsuelo."
         },
         {
-            t0: 9400.0, t1: 13600.0, cps: 28, colorKind: 0,
-            line1: "Las trabas magneticas cerraron las rejas",
-            line2: "hacia los sectores Este y Oeste."
-        },
-        {
-            t0: 13800.0, t1: 17800.0, cps: 28, colorKind: 1,
+            t0: 13100.0, t1: 18800.0, cps: 28, colorKind: 1,
             line1: "El DISYUNTOR ROJO en el sector central",
-            line2: "es el unico punto para liberar las rejas."
+            line2: "es el unico punto para restaurar el paso."
         },
         {
-            t0: 18500.0, t1: 22600.0, cps: 28, colorKind: 0,
-            line1: "Suministro critico: cuida la bateria de tu",
-            line2: "linterna y revisa las notas del personal."
+            t0: 19700.0, t1: 25000.0, cps: 28, colorKind: 0,
+            line1: "Sector Sur comprometido... los fusibles quedaron",
+            line2: "dispersos entre la zona ritual y los depositos."
         },
         {
-            t0: 22800.0, t1: 26800.0, cps: 26, colorKind: 1,
-            line1: "Guardia sin respuesta... las camaras detectan",
-            line2: "una silueta moviendose en los pasillos."
+            t0: 26000.0, t1: 32100.0, cps: 28, colorKind: 2,
+            line1: "Movimiento detectado en pasillo central.",
+            line2: "No corras cerca suyo y apaga la linterna si te busca."
         },
         {
-            t0: 27700.0, t1: 32200.0, cps: 28, colorKind: 2,
-            line1: "No corras cerca suyo. Apaga la linterna",
-            line2: "para perder su rastro si sube tu pulso."
+            t0: 32800.0, t1: 37200.0, cps: 32, colorKind: 2,
+            line1: "NOS VIO! Apunta directo a sus ojos para frenarlo...",
+            line2: "SENAL CRITICA -- CONEXION PERDIDA."
         },
         {
-            t0: 32500.0, t1: 37100.0, cps: 28, colorKind: 2,
-            line1: "Si te acorrala, apunta directo a sus ojos",
-            line2: "para frenarlo. No mires atras."
-        },
-        {
-            t0: 39200.0, t1: 43400.0, cps: 30, colorKind: 1,
-            line1: "SENAL RECUPERADA. Activa el disyuntor rojo,",
-            line2: "junta los 4 fusibles y escapa al Norte."
+            t0: 40000.0, t1: 43500.0, cps: 32, colorKind: 1,
+            line1: "ENLACE RESTABLECIDO. Activa el disyuntor rojo,",
+            line2: "reune los 4 fusibles y escapa por el Norte."
         }
     ],
 
     audioCues: [
-        { t: 100.0,   type: "music", name: "ambient",       rewind: true },
-        { t: 250.0,   type: "hook",  name: "vhs_static",    pan: 0, vol: 0.70 },
-        { t: 9100.0,  type: "sfx",   name: "gate_locked",   pan: 0, vol: 0.80 },
-        { t: 18200.0, type: "sfx",   name: "flashlight",    pan: 0, vol: 0.75 },
-        { t: 27100.0, type: "music", name: "chase",         rewind: true },
-        { t: 29500.0, type: "sfx",   name: "heartbeat",     pan: 0, vol: 0.70 },
-        { t: 33200.0, type: "hook",  name: "stalker_growl", pan: 0, vol: 0.85 },
-        { t: 37600.0, type: "hook",  name: "vhs_static",    pan: 0, vol: 0.80 },
-        { t: 38600.0, type: "music", name: "ambient",       rewind: false }
+        { t: 100.0,   type: "music",  name: "ambient",       rewind: true },
+        { t: 250.0,   type: "hook",   name: "vhs_static",    pan: 0, vol: 0.72 },
+        { t: 6250.0,  type: "sfx",    name: "gate_locked",   pan: 0, vol: 0.80 },
+        { t: 12700.0, type: "sfx",    name: "flashlight",    pan: 0, vol: 0.75 },
+        { t: 19300.0, type: "rumble", ms: 120, power: 1 },
+        { t: 25500.0, type: "music",  name: "chase",         rewind: true },
+        { t: 28200.0, type: "sfx",    name: "heartbeat",     pan: 0, vol: 0.72 },
+        { t: 32600.0, type: "hook",   name: "stalker_growl", pan: 0, vol: 0.90 },
+        { t: 32650.0, type: "rumble", ms: 260, power: 1 },
+        { t: 37300.0, type: "hook",   name: "vhs_static",    pan: 0, vol: 0.85 },
+        { t: 38200.0, type: "music",  name: "ambient",       rewind: false }
+    ]
+};
+
+// ============================================================================
+// CINEMÁTICA 02: "EVACUACION - COMPUERTA NORTE" (22 segundos, 4 planos)
+// Se dispara al escapar por la salida Norte con los 4 fusibles hacia STATE_WIN.
+// Todas las coordenadas de cámara validadas en celdas transitables (0).
+// ============================================================================
+const CINEMATIC_EVAC = {
+    id: "evac_subsuelo04",
+    durationMs: 22000.0,
+    skipHoldMs: 1000.0,
+    chapterIdx: 2,
+    exitOpen: true,
+    cameraLabel: "CAM-01 // SALIDA NORTE",
+    dateLabel: "14/10 03:41",
+
+    keyframes: [
+        // Plano 1 (0s..6.0s): Contrapicado heroico sobre la Compuerta Norte liberada por los 4 fusibles
+        { t: 0.0,     x: 10.0, y: 2.95, ang: -1.5708, eyeH: 0.92, pitchY:  0.34, fov: 0.90, flashlight: true,  snap: true,  cam: "CAM-01 // SALIDA NORTE" },
+        { t: 6000.0,  x: 10.0, y: 1.75, ang: -1.5708, eyeH: 1.48, pitchY:  0.06, fov: 0.94, flashlight: true,  snap: false, cam: "CAM-01 // SALIDA NORTE" },
+
+        // Plano 2 (6.0s..12.2s): Corte a la sala central (filas 8..11 libres) — El Acechador embiste tarde
+        { t: 6001.0,  x: 10.0, y: 8.35, ang:  1.5708, eyeH: 1.92, pitchY: -0.26, fov: 0.90, flashlight: true,  snap: true,  handheld: true, cam: "CAM-03 // SALA CENTRAL" },
+        { t: 12200.0, x: 10.0, y: 8.65, ang:  1.5400, eyeH: 1.62, pitchY: -0.12, fov: 0.82, flashlight: true,  snap: false, handheld: true, cam: "CAM-03 // SALA CENTRAL" },
+
+        // Plano 3 (12.2s..17.6s): Carrera final en mano hacia la compuerta abierta y golpe de luz
+        { t: 12201.0, x: 10.0, y: 2.65, ang: -1.5708, eyeH: 1.44, pitchY:  0.08, fov: 0.90, flashlight: true,  snap: true,  handheld: true, cam: "CAM-01 // EVACUACION" },
+        { t: 17600.0, x: 10.0, y: 1.30, ang: -1.5708, eyeH: 1.58, pitchY:  0.22, fov: 1.02, flashlight: true,  snap: false, handheld: true, cam: "CAM-01 // EVACUACION" },
+
+        // Plano 4 (17.6s..22.0s): Cierre sobre negro con tarjeta de evacuación confirmada
+        { t: 17601.0, x: 10.0, y: 1.30, ang: -1.5708, eyeH: 1.58, pitchY:  0.22, fov: 1.02, flashlight: false, snap: true,  cam: "REGISTRO CERRADO" },
+        { t: 22000.0, x: 10.0, y: 1.30, ang: -1.5708, eyeH: 1.58, pitchY:  0.22, fov: 1.02, flashlight: false, snap: false, cam: "REGISTRO CERRADO" }
+    ],
+
+    titles: [
+        { t0: 17800.0, t1: 21700.0, title: "EVACUACION CONFIRMADA", subtitle: "COMPUERTA NORTE SELLADA — SOBREVIVISTE", style: 2 }
+    ],
+
+    fades: [
+        { t0: 0.0,     t1: 850.0,   from: 128, to: 0   },
+        { t0: 17200.0, t1: 17800.0, from: 0,   to: 128 },
+        { t0: 17800.0, t1: 22000.0, from: 128, to: 128 }
+    ],
+
+    flashes: [
+        // Pulso verde eléctrico al completar los 4 fusibles y abrir la compuerta
+        { t0: 350.0,   t1: 1150.0,  r: 65,  g: 245, b: 125, maxAlpha: 64 },
+        // Corte rojo de alarma al aparecer El Acechador detrás
+        { t0: 6000.0,  t1: 6450.0,  r: 235, g: 28,  b: 28,  maxAlpha: 68 },
+        // Destello blanco/cian de superficie al cruzar la compuerta
+        { t0: 16400.0, t1: 17450.0, r: 225, g: 245, b: 255, maxAlpha: 118 }
+    ],
+
+    vhsEffects: [
+        { t0: 0.0,     t1: 1400.0,  glitch: 0.48, redBlink: 0.15, shake: 0.16, flickerFlash: 0.08 },
+        { t0: 5800.0,  t1: 6400.0,  glitch: 0.65, redBlink: 0.55, shake: 0.24, flickerFlash: 0.0  },
+        { t0: 6400.0,  t1: 12200.0, glitch: 0.52, redBlink: 0.92, shake: 0.44, flickerFlash: 0.34 },
+        { t0: 12200.0, t1: 13000.0, glitch: 0.55, redBlink: 0.35, shake: 0.26, flickerFlash: 0.0  },
+        { t0: 15500.0, t1: 17400.0, glitch: 0.32, redBlink: 0.10, shake: 0.28, flickerFlash: 0.0  }
+    ],
+
+    entities: [
+        // El Acechador embiste a toda velocidad por la sala central (fila 11.4 -> 9.35) sin llegar a tiempo
+        { t0: 6100.0,  t1: 12200.0, kind: "stalker", state: AI_HUNT, lookAtCam: true, x0: 9.85, y0: 11.4, x1: 10.0, y1: 9.35 }
+    ],
+
+    subtitles: [
+        {
+            t0: 600.0,  t1: 5700.0,  cps: 30, colorKind: 1,
+            line1: "ENERGIA RESTABLECIDA // 4 DE 4 FUSIBLES",
+            line2: "Trabas magneticas de la compuerta Norte liberadas."
+        },
+        {
+            t0: 6500.0, t1: 11900.0, cps: 32, colorKind: 2,
+            line1: "ALERTA DE PROXIMIDAD EN EL PASILLO CENTRAL!",
+            line2: "El Acechador embiste hacia la salida... corre!"
+        },
+        {
+            t0: 12600.0, t1: 16800.0, cps: 32, colorKind: 1,
+            line1: "COMPUERTA ABIERTA // CRUCE DE SUPERFICIE",
+            line2: "Dejando atras el Subsuelo 04..."
+        }
+    ],
+
+    audioCues: [
+        { t: 100.0,   type: "music",  name: "ambient",       rewind: false },
+        { t: 350.0,   type: "sfx",    name: "breaker",       pan: 0, vol: 0.95 },
+        { t: 380.0,   type: "rumble", ms: 200, power: 1 },
+        { t: 2100.0,  type: "sfx",    name: "gate_locked",   pan: 0, vol: 0.78 },
+        { t: 6050.0,  type: "music",  name: "chase",         rewind: true  },
+        { t: 6200.0,  type: "rumble", ms: 240, power: 1 },
+        { t: 7200.0,  type: "hook",   name: "stalker_growl", pan: 0, vol: 0.90 },
+        { t: 12300.0, type: "music",  name: "ambient",       rewind: false },
+        { t: 16500.0, type: "rumble", ms: 160, power: 1 }
+    ]
+};
+
+// ============================================================================
+// CINEMÁTICA 02: "CAPITULO 2 - TUNELES DE MANTENIMIENTO" (14 segundos, 3 planos)
+// ============================================================================
+const CINEMATIC_CH2_INTRO = {
+    id: "ch2_intro_tuneles",
+    chapterIdx: 1,
+    durationMs: 14000.0,
+    skipHoldMs: 1000.0,
+    exitOpen: false,
+    cameraLabel: "CAM-06 // TUNELES NIVEL -2",
+    dateLabel: "14/10 02:48",
+
+    keyframes: [
+        // Plano 1 (0s..5.0s): Picado CCTV sobre el pasillo transversal de calderas (fila 9 libre)
+        { t: 0.0,     x: 6.50, y: 9.50, ang:  0.0000, eyeH: 2.22, pitchY: -0.48, fov: 0.90, flashlight: true, snap: true,  cam: "CAM-06 // CALDERAS NIVEL -2" },
+        { t: 5000.0,  x: 11.5, y: 9.50, ang:  0.0000, eyeH: 1.85, pitchY: -0.26, fov: 0.86, flashlight: true, snap: false, cam: "CAM-06 // CALDERAS NIVEL -2" },
+
+        // Plano 2 (5.0s..9.8s): Cruce Sur donde espera el Operador Valdez herido (10.0, 15.5)
+        { t: 5001.0,  x: 7.50, y: 15.5, ang:  0.0000, eyeH: 1.35, pitchY:  0.04, fov: 0.88, flashlight: true, snap: true,  handheld: true, cam: "CAM-07 // CRUCE SUR" },
+        { t: 9800.0,  x: 8.80, y: 15.5, ang:  0.0000, eyeH: 1.45, pitchY:  0.00, fov: 0.84, flashlight: true, snap: false, handheld: true, cam: "CAM-07 // CRUCE SUR" },
+
+        // Plano 3 (9.8s..14.0s): Match-cut al spawn del jugador en Capítulo 2 (10.0, 18.2) mirando al Norte
+        { t: 9801.0,  x: 10.0, y: 18.65, ang: -1.5708, eyeH: 1.38, pitchY: -0.10, fov: 0.90, flashlight: true, snap: true,  handheld: true, cam: "ENLACE DIRECTO // CAP. 2" },
+        { t: 14000.0, x: 10.0, y: 18.45, ang: -1.5708, eyeH: 1.55, pitchY:  0.00, fov: 0.90, flashlight: true, snap: false, cam: "ENLACE DIRECTO // CAP. 2" }
+    ],
+
+    titles: [
+        { t0: 200.0, t1: 2400.0, title: "CAPITULO 2", subtitle: "TUNELES DE MANTENIMIENTO", style: 0 }
+    ],
+
+    fades: [
+        { t0: 0.0,     t1: 2300.0,  from: 128, to: 128 },
+        { t0: 2300.0,  t1: 3300.0,  from: 128, to: 0   },
+        { t0: 13500.0, t1: 14000.0, from: 0,   to: 40  }
+    ],
+
+    flashes: [
+        { t0: 4950.0, t1: 5250.0, r: 220, g: 230, b: 245, maxAlpha: 44 },
+        { t0: 9750.0, t1: 10050.0, r: 220, g: 230, b: 245, maxAlpha: 40 }
+    ],
+
+    vhsEffects: [
+        { t0: 2300.0, t1: 4200.0, glitch: 0.45, redBlink: 0.25, shake: 0.12, flickerFlash: 0.10 },
+        { t0: 5000.0, t1: 9800.0, glitch: 0.24, redBlink: 0.40, shake: 0.10, flickerFlash: 0.08 }
+    ],
+
+    entities: [],
+
+    subtitles: [
+        { t0: 2500.0, t1: 5000.0, cps: 30, colorKind: 1, line1: "NIVEL -2 // TUNELES DE MANTENIMIENTO", line2: "La compuerta Norte nos llevo directo a las calderas." },
+        { t0: 5400.0, t1: 9600.0, cps: 30, colorKind: 0, line1: "VALDEZ (RADIO): Estoy en el cruce Sur, herido.", line2: "Acercate con cuidado y usa [L2] para lanzar senuelos." },
+        { t0: 10200.0, t1: 13600.0, cps: 32, colorKind: 1, line1: "OBJETIVO: Habla con Valdez, activa la valvula", line2: "central y junta los 4 fusibles hacia Contencion." }
+    ],
+
+    audioCues: [
+        { t: 100.0,  type: "music",  name: "ambient", rewind: false },
+        { t: 250.0,  type: "hook",   name: "vhs_static", pan: 0, vol: 0.65 },
+        { t: 5100.0, type: "rumble", ms: 110, power: 1 }
+    ]
+};
+
+// ============================================================================
+// CINEMÁTICA 03: "CAPITULO 3 - PABELLON DE CONTENCION" (14 segundos, 3 planos)
+// ============================================================================
+const CINEMATIC_CH3_INTRO = {
+    id: "ch3_intro_contencion",
+    chapterIdx: 2,
+    durationMs: 14000.0,
+    skipHoldMs: 1000.0,
+    exitOpen: false,
+    cameraLabel: "CAM-09 // PABELLON CONTENCION",
+    dateLabel: "14/10 03:19",
+
+    keyframes: [
+        // Plano 1 (0s..5.2s): Cámara alta sobre el corredor central ritual (fila 10 libre)
+        { t: 0.0,     x: 6.50, y: 10.5, ang:  0.0000, eyeH: 2.24, pitchY: -0.52, fov: 0.90, flashlight: true, snap: true,  cam: "CAM-09 // CAMARA DE CONTENCION" },
+        { t: 5200.0,  x: 12.5, y: 10.5, ang:  0.0000, eyeH: 1.92, pitchY: -0.30, fov: 0.86, flashlight: true, snap: false, cam: "CAM-09 // CAMARA DE CONTENCION" },
+
+        // Plano 2 (5.2s..9.8s): Contrapicado tenso con El Acechador patrullando el pabellón
+        { t: 5201.0,  x: 6.50, y: 5.50, ang:  0.0000, eyeH: 0.94, pitchY:  0.26, fov: 0.88, flashlight: true, snap: true,  handheld: true, cam: "CAM-10 // SECTOR NORTE" },
+        { t: 9800.0,  x: 7.40, y: 5.50, ang:  0.0200, eyeH: 1.02, pitchY:  0.22, fov: 0.82, flashlight: true, snap: false, handheld: true, cam: "CAM-10 // SECTOR NORTE" },
+
+        // Plano 3 (9.8s..14.0s): Match-cut al spawn del jugador en Capítulo 3 (10.0, 18.2)
+        { t: 9801.0,  x: 10.0, y: 18.60, ang: -1.5708, eyeH: 1.38, pitchY: -0.10, fov: 0.90, flashlight: true, snap: true,  handheld: true, cam: "ENLACE DIRECTO // CAP. 3" },
+        { t: 14000.0, x: 10.0, y: 18.45, ang: -1.5708, eyeH: 1.55, pitchY:  0.00, fov: 0.90, flashlight: true, snap: false, cam: "ENLACE DIRECTO // CAP. 3" }
+    ],
+
+    titles: [
+        { t0: 200.0, t1: 2400.0, title: "CAPITULO 3", subtitle: "PABELLON DE CONTENCION", style: 1 }
+    ],
+
+    fades: [
+        { t0: 0.0,     t1: 2300.0,  from: 128, to: 128 },
+        { t0: 2300.0,  t1: 3300.0,  from: 128, to: 0   },
+        { t0: 13500.0, t1: 14000.0, from: 0,   to: 40  }
+    ],
+
+    flashes: [
+        { t0: 5150.0, t1: 5500.0, r: 235, g: 28, b: 28, maxAlpha: 64 },
+        { t0: 9750.0, t1: 10050.0, r: 220, g: 230, b: 245, maxAlpha: 44 }
+    ],
+
+    vhsEffects: [
+        { t0: 2300.0, t1: 5200.0, glitch: 0.42, redBlink: 0.45, shake: 0.14, flickerFlash: 0.14 },
+        { t0: 5200.0, t1: 9800.0, glitch: 0.68, redBlink: 0.88, shake: 0.34, flickerFlash: 0.32 }
+    ],
+
+    entities: [
+        { t0: 5300.0, t1: 9800.0, kind: "stalker", state: AI_HUNT, lookAtCam: true, x0: 13.5, y0: 5.5, x1: 10.2, y1: 5.5 }
+    ],
+
+    subtitles: [
+        { t0: 2500.0, t1: 5100.0, cps: 30, colorKind: 2, line1: "PABELLON DE CONTENCION // ORIGEN DEL SUJETO 04", line2: "Aqui es donde inicio el experimento." },
+        { t0: 5500.0, t1: 9600.0, cps: 32, colorKind: 2, line1: "DRA. MORALES (RADIO): Esta en su territorio!", line2: "Usa los escondites [X] y apaga la luz si se acerca." },
+        { t0: 10200.0, t1: 13600.0, cps: 32, colorKind: 1, line1: "OBJETIVO FINAL: Libera el nucleo, junta los 4", line2: "fusibles y alcanza el ascensor a la superficie." }
+    ],
+
+    audioCues: [
+        { t: 100.0,  type: "music",  name: "ambient", rewind: false },
+        { t: 5250.0, type: "music",  name: "chase",   rewind: true  },
+        { t: 5300.0, type: "rumble", ms: 220, power: 1 },
+        { t: 9800.0, type: "music",  name: "ambient", rewind: false }
     ]
 };
 
@@ -4029,26 +4747,62 @@ const STATE_NOTE_VIEW = 10;
 const STATE_LOADING   = 11;
 const STATE_SPLASH      = 12;
 const STATE_MAP_LOADING = 13;
-const STATE_CINEMATIC   = 14;
+const STATE_CINEMATIC       = 14;
+const STATE_CINEMATICS_MENU = 15;
 
 let gameState = STATE_SPLASH;
-let pendingIntroCinematic = false;
+let pendingCinematicSeq = null;
+let pendingCinematicNext = STATE_PLAY;
 
-function startPlayWithLoading(playIntro = false) {
-    resetGame();
-    pendingIntroCinematic = !!playIntro;
+function getChapterIntroCinematic(chapterIdx) {
+    if (chapterIdx === 1) return CINEMATIC_CH2_INTRO;
+    if (chapterIdx === 2) return CINEMATIC_CH3_INTRO;
+    return CINEMATIC_INTRO;
+}
+
+function startCinematicWithLoading(sequence, nextState) {
+    const chIdx = (sequence && sequence.chapterIdx !== undefined) ? sequence.chapterIdx : 0;
+    if (activeChapterIdx !== chIdx || hwLoadedChapterIdx !== chIdx) {
+        resetGame(chIdx);
+        prepareChapter3D(chIdx);
+    }
+    pendingCinematicSeq = sequence;
+    pendingCinematicNext = nextState;
     if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
         mapLoadPhase = 0;
         switchState(STATE_MAP_LOADING);
     } else {
         if (hw3dReady) buildHwEntityTransforms();
-        if (pendingIntroCinematic) {
-            pendingIntroCinematic = false;
-            startCinematic(CINEMATIC_INTRO, STATE_PLAY);
+        pendingCinematicSeq = null;
+        startCinematic(sequence, nextState);
+    }
+}
+
+function startChapter(chapterIdx, playIntro = true) {
+    const need3DReload = (hwLoadedChapterIdx !== chapterIdx);
+    resetGame(chapterIdx);
+    if (need3DReload) prepareChapter3D(chapterIdx);
+    const shouldPlayIntro = !!playIntro && !GAME_SETTINGS.skipIntro;
+    pendingCinematicSeq = shouldPlayIntro ? getChapterIntroCinematic(chapterIdx) : null;
+    pendingCinematicNext = STATE_PLAY;
+    if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
+        mapLoadPhase = 0;
+        switchState(STATE_MAP_LOADING);
+    } else {
+        if (hw3dReady) buildHwEntityTransforms();
+        if (pendingCinematicSeq) {
+            const seq = pendingCinematicSeq;
+            const nextSt = pendingCinematicNext;
+            pendingCinematicSeq = null;
+            startCinematic(seq, nextSt);
         } else {
             switchState(STATE_PLAY);
         }
     }
+}
+
+function startPlayWithLoading(playIntro = false) {
+    startChapter(0, playIntro);
 }
 let returnState = STATE_TITLE;
 let frameTick = 0;
@@ -4063,6 +4817,7 @@ let pauseCursor = 0;
 let optionsCursor = 0;
 let endCursor = 0;
 let loreTabIdx = 0;
+let cinematicsCursor = 0;
 let activeNoteIdx = 0;
 let saveFeedbackTimer = 0;
 let menuStickCooldown = 0;
@@ -4082,6 +4837,15 @@ let currentFov = toF64(0.90);
 let flashlightWarmup = toF64(1.0);
 let exhausted = false;
 let bumpCooldown = 0;
+let playerVelX = toF64(0.0);
+let playerVelY = toF64(0.0);
+let quickTurnRem = toF64(0.0);
+let playerDecoys = 1;
+let decoyCooldown = 0;
+let activeRadioTriggers = [];
+let activeInteractEnt = null;
+let activeInteractLabel = "";
+let activeInteractIsExit = false;
 let debugMode = 0; // R2 en juego: 0 apagado, 1 datos, 2 datos + paredes magenta
 
 let worldGrid = createWorldGrid();
@@ -4235,19 +4999,29 @@ function readMenuDir() {
     return { dx, dy };
 }
 
-function resetGame() {
-    worldGrid = createWorldGrid();
+function resetGame(chapterIdx) {
+    activeChapterIdx = (chapterIdx !== undefined) ? chapterIdx : 0;
+    const ch = getActiveChapter();
+    worldGrid = createWorldGrid(activeChapterIdx);
     breakerActive = false;
     fusesCollected = 0;
-    collectedNotes = [false, false, false, false];
+    collectedNotes = [false, false, false, false, false, false, false, false];
     notesFoundCount = 0;
-    elapsedMs = 0;
+    if (activeChapterIdx === 0) elapsedMs = 0;
     mapOpen = false;
     mapAnim = toF64(0.0);
     currentFov = toF64(0.90);
     flashlightWarmup = toF64(0.25);
     exhausted = false;
     bumpCooldown = 0;
+    playerVelX = toF64(0.0);
+    playerVelY = toF64(0.0);
+    quickTurnRem = toF64(0.0);
+    playerDecoys = 1;
+    decoyCooldown = 0;
+    activeInteractEnt = null;
+    activeInteractLabel = "";
+    activeInteractIsExit = false;
     flashTint.alpha = 0;
     introFade = 124;
     popupTimer = 0;
@@ -4256,17 +5030,23 @@ function resetGame() {
 
     const isNightmare = GAME_SETTINGS.difficulty === 1;
 
-    player.x = toF64(10.0);
-    player.y = toF64(1.8);
-    player.ang = toF64(Math.PI * 0.5);
+    player.x = toF64(ch.playerSpawn.x);
+    player.y = toF64(ch.playerSpawn.y);
+    player.ang = toF64(ch.playerSpawn.ang);
+    player.eyeH = toF64(WORLD_EYE_H);
+    player.pitchY = toF64(0.0);
+    player.crouched = false;
+    player.hiding = false;
+    player.hideReturnX = player.x;
+    player.hideReturnY = player.y;
     player.bobPhase = toF64(0.0);
     player.battery = toF64(isNightmare ? 85.0 : 100.0);
     player.flashlightOn = true;
     player.stamina = toF64(100.0);
 
-    stalker.x = toF64(10.5);
-    stalker.y = toF64(16.5);
-    stalker.baseSpeed = toF64(isNightmare ? 0.029 : 0.024);
+    stalker.x = toF64(ch.stalkerSpawn.x);
+    stalker.y = toF64(ch.stalkerSpawn.y);
+    stalker.baseSpeed = toF64(isNightmare ? ch.stalkerSpawn.speedNightmare : ch.stalkerSpawn.speedNormal);
     stalker.state = AI_PATROL;
     stalker.targetX = toF64(10.0);
     stalker.targetY = toF64(10.0);
@@ -4276,27 +5056,38 @@ function resetGame() {
     stalker.hasNextNode = false;
     resetStalkerAnim(stalker, stalker.x, stalker.y);
 
-    entities = [
-        { kind: "fuse", x: toF64(10.0), y: toF64(17.5), taken: false },
-        { kind: "fuse", x: toF64(10.0), y: toF64(9.5),  taken: false },
-        { kind: "fuse", x: toF64(2.5),  y: toF64(17.5), taken: false },
-        { kind: "fuse", x: toF64(17.5), y: toF64(17.5), taken: false },
+    entities = [];
+    for (let i = 0; i < ch.entities.length; i++) {
+        const src = ch.entities[i];
+        entities.push({
+            kind: src.kind,
+            x: toF64(src.x),
+            y: toF64(src.y),
+            msgIdx: src.msgIdx,
+            faceAng: src.faceAng,
+            name: src.name,
+            dialog: src.dialog,
+            spoken: false,
+            taken: false
+        });
+    }
 
-        { kind: "breaker", x: toF64(10.0), y: toF64(11.5), taken: false },
+    activeRadioTriggers = [];
+    for (let i = 0; i < ch.radioTriggers.length; i++) {
+        const rt = ch.radioTriggers[i];
+        activeRadioTriggers.push({
+            x: toF64(rt.x),
+            y: toF64(rt.y),
+            radiusSq: toF64(rt.radius * rt.radius),
+            text: rt.text,
+            duration: rt.duration,
+            fired: false
+        });
+    }
 
-        { kind: "battery", x: toF64(8.5),  y: toF64(5.5),  taken: false },
-        { kind: "battery", x: toF64(1.5),  y: toF64(2.5),  taken: false },
-        { kind: "battery", x: toF64(18.5), y: toF64(2.5),  taken: false },
-
-        { kind: "note", x: toF64(10.0), y: toF64(3.5),  taken: false, msgIdx: 0 },
-        { kind: "note", x: toF64(8.5),  y: toF64(14.5), taken: false, msgIdx: 1 },
-        { kind: "note", x: toF64(3.5),  y: toF64(8.5),  taken: false, msgIdx: 2 },
-        { kind: "note", x: toF64(16.5), y: toF64(8.5),  taken: false, msgIdx: 3 }
-    ];
-
-    showPopup("SECTOR SUBSUELO 04", 90);
-    showRadio("OBJETIVO: Activa el Disyuntor rojo, junta 4 Fusibles y escapa al Norte.", 260);
-    if (frameTick >= 30) triggerRumble(0, 0);
+    showPopup(ch.title, 100);
+    showRadio(ch.objectiveBreaker, 210);
+    if (hw3dReady) buildHwEntityTransforms();
 }
 
 resetGame();
@@ -4376,9 +5167,11 @@ Screen.display(() => {
             drawMapLoadingScreen(SCREEN_W, SCREEN_H, fnt);
             if (pad.justPressed(Pads.CIRCLE)) {
                 GAME_SETTINGS.qualityIndex = 1;
-                if (pendingIntroCinematic) {
-                    pendingIntroCinematic = false;
-                    startCinematic(CINEMATIC_INTRO, STATE_PLAY);
+                if (pendingCinematicSeq) {
+                    const seq = pendingCinematicSeq;
+                    const nextSt = pendingCinematicNext;
+                    pendingCinematicSeq = null;
+                    startCinematic(seq, nextSt);
                 } else {
                     switchState(STATE_PLAY);
                 }
@@ -4393,9 +5186,11 @@ Screen.display(() => {
                 hwLastFlashState = -1;
                 hwPlayFrameCount = 0;
                 buildHwEntityTransforms();
-                if (pendingIntroCinematic) {
-                    pendingIntroCinematic = false;
-                    startCinematic(CINEMATIC_INTRO, STATE_PLAY);
+                if (pendingCinematicSeq) {
+                    const seq = pendingCinematicSeq;
+                    const nextSt = pendingCinematicNext;
+                    pendingCinematicSeq = null;
+                    startCinematic(seq, nextSt);
                 } else {
                     switchState(STATE_PLAY);
                 }
@@ -4435,7 +5230,7 @@ Screen.display(() => {
             drawTitleMenu(SCREEN_W, SCREEN_H, titleCursor, frameTick, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) { titleCursor = (titleCursor + nav.dy + 5) % 5; playSfx("ui_move", 0, 0.7); }
+            if (nav.dy !== 0) { titleCursor = (titleCursor + nav.dy + 6) % 6; playSfx("ui_move", 0, 0.7); }
             if (titleCursor === 0 && nav.dx !== 0) {
                 GAME_SETTINGS.difficulty = (GAME_SETTINGS.difficulty + 1) & 1;
             }
@@ -4458,6 +5253,10 @@ Screen.display(() => {
                 } else if (titleCursor === 4) {
                     returnState = STATE_TITLE;
                     switchState(STATE_CREDITS);
+                } else if (titleCursor === 5) {
+                    returnState = STATE_TITLE;
+                    cinematicsCursor = 0;
+                    switchState(STATE_CINEMATICS_MENU);
                 }
             }
         } else if (gameState === STATE_OPTIONS) {
@@ -4466,9 +5265,9 @@ Screen.display(() => {
             drawOptionsMenu(SCREEN_W, SCREEN_H, optionsCursor, saveFeedbackTimer, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 9) % 9; playSfx("ui_move", 0, 0.7); }
+            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 10) % 10; playSfx("ui_move", 0, 0.7); }
 
-            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 8 ? 1 : 0);
+            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 9 ? 1 : 0);
             if (adjust !== 0) {
                 if (optionsCursor === 0) {
                     GAME_SETTINGS.qualityIndex = (GAME_SETTINGS.qualityIndex + adjust + 3) % 3;
@@ -4499,10 +5298,12 @@ Screen.display(() => {
                 } else if (optionsCursor === 7) {
                     GAME_SETTINGS.showFps = !GAME_SETTINGS.showFps;
                     if (GAME_SETTINGS.showFps) ensureFpsCounter();
+                } else if (optionsCursor === 8) {
+                    GAME_SETTINGS.skipIntro = !GAME_SETTINGS.skipIntro;
                 }
             }
 
-            if (pad.justPressed(Pads.CROSS) && optionsCursor === 8) {
+            if (pad.justPressed(Pads.CROSS) && optionsCursor === 9) {
                 saveGameData();
                 saveFeedbackTimer = 90;
                 switchState(returnState);
@@ -4520,6 +5321,11 @@ Screen.display(() => {
             drawLoreMenu(SCREEN_W, SCREEN_H, collectedNotes, loreTabIdx, returnState === STATE_PAUSE, fnt);
             const nav = readMenuDir();
             if (nav.dx !== 0) loreTabIdx = (loreTabIdx + nav.dx + LORE_NOTES.length) % LORE_NOTES.length;
+            if (returnState === STATE_TITLE && pad.justPressed(Pads.TRIANGLE)) {
+                playSfx("ui_select", 0, 0.85);
+                startCinematicWithLoading(CINEMATIC_INTRO, STATE_LORE);
+                return;
+            }
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.CIRCLE) || pad.justPressed(Pads.START)) {
                 switchState(returnState);
             }
@@ -4528,6 +5334,34 @@ Screen.display(() => {
             drawCreditsMenu(SCREEN_W, SCREEN_H, MODE_INFO, fnt);
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.CIRCLE) || pad.justPressed(Pads.START)) {
                 switchState(returnState);
+            }
+        } else if (gameState === STATE_CINEMATICS_MENU) {
+            render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.10, frameTick, false, 0.90, 1.0, 1.0, 0.0);
+            drawCinematicsMenu(SCREEN_W, SCREEN_H, cinematicsCursor, fnt);
+            const nav = readMenuDir();
+            if (nav.dy !== 0) {
+                cinematicsCursor = (cinematicsCursor + nav.dy + CINEMATIC_MENU_ITEMS.length) % CINEMATIC_MENU_ITEMS.length;
+                playSfx("ui_move", 0, 0.7);
+            }
+            if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.START)) {
+                playSfx("ui_select", 0, 0.85);
+                if (cinematicsCursor === 0) {
+                    startCinematicWithLoading(CINEMATIC_INTRO, STATE_CINEMATICS_MENU);
+                    return;
+                } else if (cinematicsCursor === 1) {
+                    startCinematicWithLoading(CINEMATIC_CH2_INTRO, STATE_CINEMATICS_MENU);
+                    return;
+                } else if (cinematicsCursor === 2) {
+                    startCinematicWithLoading(CINEMATIC_CH3_INTRO, STATE_CINEMATICS_MENU);
+                    return;
+                } else if (cinematicsCursor === 3) {
+                    startCinematicWithLoading(CINEMATIC_EVAC, STATE_CINEMATICS_MENU);
+                    return;
+                } else {
+                    switchState(STATE_TITLE);
+                }
+            } else if (pad.justPressed(Pads.CIRCLE)) {
+                switchState(STATE_TITLE);
             }
         } else if (gameState === STATE_NOTE_VIEW) {
             render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.10, frameTick, fusesCollected === 4, currentFov, flashlightWarmup, mapAnim, 0.0);
@@ -4560,7 +5394,7 @@ Screen.display(() => {
                 switchState(STATE_PAUSE);
                 return;
             }
-            if (pad.justPressed(Pads.SELECT) || pad.justPressed(Pads.L2)) {
+            if (pad.justPressed(Pads.SELECT)) {
                 mapOpen = !mapOpen;
             }
             if (pad.justPressed(Pads.R2)) {
@@ -4573,6 +5407,35 @@ Screen.display(() => {
                 if (player.flashlightOn) flashlightWarmup = toF64(0.25);
                 playSfx("flashlight", 0, 0.85);
             }
+            if (!player.hiding && pad.justPressed(Pads.SQUARE)) {
+                player.crouched = !player.crouched;
+            }
+            if (decoyCooldown > 0) decoyCooldown--;
+            if (!player.hiding && pad.justPressed(Pads.L2) && decoyCooldown === 0) {
+                if (playerDecoys > 0) {
+                    playerDecoys--;
+                    decoyCooldown = 45;
+                    const tDirX = toF64(Math.cos(player.ang));
+                    const tDirY = toF64(Math.sin(player.ang));
+                    let tx = player.x;
+                    let ty = player.y;
+                    for (let s = 1; s <= 10; s++) {
+                        const cx = fadd(player.x, tDirX * (s * 0.5));
+                        const cy = fadd(player.y, tDirY * (s * 0.5));
+                        if (!isPosWalkable(worldGrid, cx, cy, 0.25)) break;
+                        tx = cx;
+                        ty = cy;
+                    }
+                    alertStalkerToNoise(stalker, tx, ty, GAME_SETTINGS.difficulty);
+                    playSfx("pickup", 0, 0.9);
+                    triggerRumble(80, 1);
+                    triggerScreenFlash(90, 215, 255, 34);
+                    showPopup("SENUELO LANZADO");
+                    showRadio("DISTRACCION: El Acechador se dirige al ruido del senuelo.", 160);
+                } else {
+                    showPopup("SIN SENUELOS");
+                }
+            }
 
             if (mapOpen) mapAnim = toF64(Math.min(1.0, fadd(mapAnim, 0.11 * dtScale)));
             else mapAnim = toF64(Math.max(0.0, mapAnim - 0.13 * dtScale));
@@ -4581,14 +5444,9 @@ Screen.display(() => {
                 flashlightWarmup = toF64(Math.min(1.0, fadd(flashlightWarmup, 0.14 * dtScale)));
             }
 
-            const rx = toF64((pad.rx || 0) / 128.0);
-            const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
-            const turnSpeed = (mapOpen ? (baseTurn * 0.70) : baseTurn) * dtScale;
-            if ((Math.abs(rx) - STICK_DEADZONE) > 0) player.ang = fadd(player.ang, rx * turnSpeed);
-            if (pad.pressed(Pads.L1)) player.ang = player.ang - turnSpeed;
-            if (pad.pressed(Pads.R1)) player.ang = fadd(player.ang, turnSpeed);
-            if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
-            else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
+            const targetEyeH = player.hiding ? toF64(1.18) : (player.crouched ? toF64(1.02) : toF64(WORLD_EYE_H));
+            const curEyeH = toF64(player.eyeH !== undefined ? player.eyeH : WORLD_EYE_H);
+            player.eyeH = fadd(curEyeH, (targetEyeH - curEyeH) * Math.min(1.0, 0.22 * dtScale));
 
             let fwd = F64_ZERO, strafe = F64_ZERO;
             const lx = toF64((pad.lx || 0) / 128.0);
@@ -4600,8 +5458,27 @@ Screen.display(() => {
             if (pad.pressed(Pads.LEFT)) strafe = toF64(-1.0);
             if (pad.pressed(Pads.RIGHT)) strafe = toF64(1.0);
 
-            const isMoving = ((Math.abs(fwd) - 0.05) > 0) || ((Math.abs(strafe) - 0.05) > 0);
-            const wantSprint = (pad.pressed(Pads.CIRCLE) || pad.pressed(Pads.SQUARE)) && isMoving && !mapOpen;
+            if (!player.hiding && (fwd - (-0.5)) < 0 && pad.justPressed(Pads.CIRCLE) && (quickTurnRem - 0.01) <= 0) {
+                quickTurnRem = toF64(Math.PI);
+            }
+            if ((quickTurnRem - 0.01) > 0) {
+                const qtStep = Math.min(quickTurnRem, toF64(0.26 * dtScale));
+                player.ang = fadd(player.ang, qtStep);
+                quickTurnRem = quickTurnRem - qtStep;
+            } else {
+                const rx = toF64((pad.rx || 0) / 128.0);
+                const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
+                const turnSpeed = (mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn) * dtScale;
+                if ((Math.abs(rx) - STICK_DEADZONE) > 0) player.ang = fadd(player.ang, rx * turnSpeed);
+                if (pad.pressed(Pads.L1)) player.ang = player.ang - turnSpeed;
+                if (pad.pressed(Pads.R1)) player.ang = fadd(player.ang, turnSpeed);
+            }
+            if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
+            else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
+
+            const isMovingInput = !player.hiding && (((Math.abs(fwd) - 0.05) > 0) || ((Math.abs(strafe) - 0.05) > 0));
+            const wantSprint = !player.hiding && pad.pressed(Pads.CIRCLE) && (fwd - (-0.3)) > 0 && isMovingInput && !mapOpen;
+            if (wantSprint && player.crouched) player.crouched = false;
             const isSprinting = wantSprint && !exhausted && ((player.stamina - 2.0) > 0);
 
             if (isSprinting) {
@@ -4612,42 +5489,49 @@ Screen.display(() => {
                 if (exhausted && ((player.stamina - 32.0) >= 0)) exhausted = false;
             }
 
-            // FOV constante para evitar mareo 3D al correr o frenar
             currentFov = toF64(0.90);
 
-            const speed = (isSprinting ? 0.082 : (mapOpen ? 0.032 : 0.048)) * dtScale;
+            const targetSpeed = player.hiding ? 0.0 : (isSprinting ? 0.082 : (player.crouched ? 0.028 : (mapOpen ? 0.032 : 0.048)));
             const dirX = toF64(Math.cos(player.ang));
             const dirY = toF64(Math.sin(player.ang));
-            const dx = (dirX * fwd - dirY * strafe) * speed;
-            const dy = fadd(dirY * fwd, dirX * strafe) * speed;
+            const tgtVx = (dirX * fwd - dirY * strafe) * targetSpeed;
+            const tgtVy = fadd(dirY * fwd, dirX * strafe) * targetSpeed;
+            const accel = Math.min(1.0, (isMovingInput ? 0.26 : 0.30) * dtScale);
+            playerVelX = fadd(playerVelX, (tgtVx - playerVelX) * accel);
+            playerVelY = fadd(playerVelY, (tgtVy - playerVelY) * accel);
+            const dx = playerVelX * dtScale;
+            const dy = playerVelY * dtScale;
+            const isMoving = !player.hiding && (((Math.abs(playerVelX) - 0.006) > 0) || ((Math.abs(playerVelY) - 0.006) > 0));
 
             let bumpedGate = false;
-            const nextX = fadd(player.x, dx);
-            const resolvedX = movePlayerAxis(worldGrid, player.x, player.y, dx, true, 0.25);
-            if (Math.abs(resolvedX - nextX) > 0.0001 && getCell(worldGrid, (fadd(nextX, (dx > 0) ? 0.28 : -0.28)) | 0, player.y | 0) === 5) {
-                bumpedGate = true;
+            if (!player.hiding) {
+                const nextX = fadd(player.x, dx);
+                const resolvedX = movePlayerAxis(worldGrid, player.x, player.y, dx, true, 0.25);
+                if (Math.abs(resolvedX - nextX) > 0.0001 && getCell(worldGrid, (fadd(nextX, (dx > 0) ? 0.28 : -0.28)) | 0, player.y | 0) === 5) {
+                    bumpedGate = true;
+                }
+                player.x = resolvedX;
+                const nextY = fadd(player.y, dy);
+                const resolvedY = movePlayerAxis(worldGrid, player.x, player.y, dy, false, 0.25);
+                if (Math.abs(resolvedY - nextY) > 0.0001 && getCell(worldGrid, player.x | 0, (fadd(nextY, (dy > 0) ? 0.28 : -0.28)) | 0) === 5) {
+                    bumpedGate = true;
+                }
+                player.y = resolvedY;
             }
-            player.x = resolvedX;
-            const nextY = fadd(player.y, dy);
-            const resolvedY = movePlayerAxis(worldGrid, player.x, player.y, dy, false, 0.25);
-            if (Math.abs(resolvedY - nextY) > 0.0001 && getCell(worldGrid, player.x | 0, (fadd(nextY, (dy > 0) ? 0.28 : -0.28)) | 0) === 5) {
-                bumpedGate = true;
-            }
-            player.y = resolvedY;
             if (bumpCooldown > 0) bumpCooldown--;
             if (bumpedGate && bumpCooldown === 0) {
                 bumpCooldown = 60;
                 playSfx("gate_locked", 0, 0.9);
                 triggerRumble(110, 1);
                 triggerScreenFlash(200, 60, 20, 42);
-                showRadio("REJA BLOQUEADA: Activa el Disyuntor rojo en el sector central.", 160);
+                showRadio("REJA BLOQUEADA: Activa el disyuntor central para liberar el paso.", 160);
             }
 
             if (isMoving) {
                 const prevStepCycle = (player.bobPhase / 3.14159) | 0;
-                player.bobPhase = fadd(player.bobPhase, (isSprinting ? 0.28 : 0.16) * dtScale);
+                player.bobPhase = fadd(player.bobPhase, (isSprinting ? 0.28 : (player.crouched ? 0.10 : 0.16)) * dtScale);
                 const curStepCycle = (player.bobPhase / 3.14159) | 0;
-                if (curStepCycle !== prevStepCycle) {
+                if (curStepCycle !== prevStepCycle && !player.crouched) {
                     playSfx("step", (curStepCycle & 1) ? -18 : 18, isSprinting ? 0.85 : 0.55);
                 }
             }
@@ -4657,63 +5541,151 @@ Screen.display(() => {
                 player.battery = toF64(Math.max(0.0, player.battery - batDrain * dtScale));
             }
 
-            for (let i = 0; i < entities.length; i++) {
-                const e = entities[i];
-                if (e.taken) continue;
-                const edx = player.x - toF64(e.x);
-                const edy = player.y - toF64(e.y);
-                if (((edx * edx - (-(edy * edy))) - 0.81) < 0) {
-                    e.taken = true;
-                    if (e.kind === "fuse") {
-                        fusesCollected++;
-                        playSfx("pickup", 0, 0.95);
-                        stalker.baseSpeed = fadd(stalker.baseSpeed, 0.003);
-                        triggerScreenFlash(255, 200, 50, 56);
-                        triggerRumble(160, 1);
-                        showPopup(FUSE_POPUP_LABELS[fusesCollected] || "+1 FUSIBLE");
-                        showRadio(FUSE_RADIO_LABELS[fusesCollected] || "FUSIBLE RECOLECTADO.", 190);
-                    } else if (e.kind === "battery") {
-                        player.battery = toF64(Math.min(100.0, fadd(player.battery, 45.0)));
-                        playSfx("pickup", 0, 0.85);
-                        triggerScreenFlash(50, 220, 255, 48);
-                        triggerRumble(90, 1);
-                        showPopup("+45% BATERIA");
-                        showRadio("BATERIA +45% RECUPERADA.", 140);
-                    } else if (e.kind === "breaker") {
-                        breakerActive = true;
-                        playSfx("breaker", 0, 1.0);
-                        for (let gy = 0; gy < worldGrid.length; gy++) {
-                            for (let gx = 0; gx < worldGrid[gy].length; gx++) {
-                                if (worldGrid[gy][gx] === 5) worldGrid[gy][gx] = 0;
-                            }
-                        }
-                        triggerScreenFlash(60, 255, 110, 62);
-                        triggerRumble(210, 1);
-                        showPopup("REJAS DESBLOQUEADAS");
-                        showRadio("DISYUNTOR ACTIVADO: Se abrieron las rejas Este y Oeste!", 240);
-                    } else if (e.kind === "note") {
-                        playSfx("pickup", 0, 0.75);
-                        if (!collectedNotes[e.msgIdx]) {
-                            collectedNotes[e.msgIdx] = true;
-                            notesFoundCount++;
-                        }
-                        activeNoteIdx = e.msgIdx;
-                        triggerScreenFlash(220, 230, 255, 38);
-                        showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
-                        switchState(STATE_NOTE_VIEW);
-                        return;
+            if ((frameTick % 10) === 0) {
+                for (let i = 0; i < activeRadioTriggers.length; i++) {
+                    const rt = activeRadioTriggers[i];
+                    if (rt.fired) continue;
+                    const rdx = player.x - rt.x;
+                    const rdy = player.y - rt.y;
+                    if (((rdx * rdx - (-(rdy * rdy))) - rt.radiusSq) < 0) {
+                        rt.fired = true;
+                        showRadio(rt.text, rt.duration);
                     }
                 }
             }
 
-            if (fusesCollected === 4 && ((player.y - 1.45) < 0) && ((player.x - 8.5) > 0) && ((player.x - 11.5) < 0)) {
-                recordEscape((elapsedMs / 1000) | 0, GAME_SETTINGS.difficulty);
-                endCursor = 0;
-                switchState(STATE_WIN);
-                return;
+            activeInteractEnt = null;
+            activeInteractLabel = "";
+            activeInteractIsExit = false;
+
+            if (player.hiding) {
+                activeInteractLabel = "[X] SALIR DEL ESCONDITE";
+                if (pad.justPressed(Pads.CROSS)) {
+                    player.hiding = false;
+                    player.x = player.hideReturnX;
+                    player.y = player.hideReturnY;
+                    playSfx("ui_select", 0, 0.7);
+                }
+            } else {
+                let bestDistSq = toF64(1.85);
+                for (let i = 0; i < entities.length; i++) {
+                    const e = entities[i];
+                    if (e.taken) continue;
+                    const edx = player.x - toF64(e.x);
+                    const edy = player.y - toF64(e.y);
+                    const d2 = edx * edx - (-(edy * edy));
+                    if ((d2 - bestDistSq) < 0) {
+                        bestDistSq = d2;
+                        activeInteractEnt = e;
+                    }
+                }
+                if (fusesCollected === 4 && ((player.y - 1.85) < 0) && ((player.x - 8.2) > 0) && ((player.x - 11.8) < 0)) {
+                    activeInteractIsExit = true;
+                    activeInteractLabel = (activeChapterIdx < CHAPTERS.length - 1)
+                        ? "[X] ABRIR COMPUERTA AL SIGUIENTE SECTOR"
+                        : "[X] ACTIVAR ASCENSOR Y ESCAPAR";
+                } else if (activeInteractEnt) {
+                    const k = activeInteractEnt.kind;
+                    if (k === "fuse") activeInteractLabel = "[X] TOMAR FUSIBLE";
+                    else if (k === "battery") activeInteractLabel = "[X] TOMAR BATERIA (+45%)";
+                    else if (k === "breaker") activeInteractLabel = "[X] ACTIVAR DISYUNTOR CENTRAL";
+                    else if (k === "note") activeInteractLabel = "[X] LEER REGISTRO";
+                    else if (k === "decoy") activeInteractLabel = "[X] TOMAR SENUELO";
+                    else if (k === "locker") activeInteractLabel = "[X] ESCONDERSE";
+                    else if (k === "npc") activeInteractLabel = "[X] HABLAR CON VALDEZ";
+                }
+
+                if (pad.justPressed(Pads.CROSS)) {
+                    if (activeInteractIsExit) {
+                        if (activeChapterIdx < CHAPTERS.length - 1) {
+                            const nextCh = activeChapterIdx + 1;
+                            if (RECORDS.maxChapterUnlocked < (nextCh + 1)) {
+                                RECORDS.maxChapterUnlocked = nextCh + 1;
+                                saveGameData();
+                            }
+                            playSfx("breaker", 0, 0.95);
+                            triggerRumble(180, 1);
+                            startChapter(nextCh, true);
+                            return;
+                        } else {
+                            recordEscape((elapsedMs / 1000) | 0, GAME_SETTINGS.difficulty);
+                            endCursor = 0;
+                            startCinematic(CINEMATIC_EVAC, STATE_WIN);
+                            return;
+                        }
+                    } else if (activeInteractEnt) {
+                        const e = activeInteractEnt;
+                        if (e.kind === "locker") {
+                            player.hiding = true;
+                            player.crouched = false;
+                            player.hideReturnX = player.x;
+                            player.hideReturnY = player.y;
+                            player.x = toF64(e.x);
+                            player.y = toF64(e.y);
+                            if (e.faceAng !== undefined) player.ang = toF64(e.faceAng);
+                            playerVelX = toF64(0.0);
+                            playerVelY = toF64(0.0);
+                            playSfx("ui_select", 0, 0.75);
+                            showPopup("ESCONDIDO");
+                        } else if (e.kind === "npc") {
+                            playSfx("ui_select", 0, 0.85);
+                            e.spoken = true;
+                            showPopup(e.name || "SOBREVIVIENTE");
+                            showRadio(e.dialog || "VALDEZ: Sigue adelante, no te detengas.", 260);
+                        } else {
+                            e.taken = true;
+                            if (e.kind === "fuse") {
+                                fusesCollected++;
+                                playSfx("pickup", 0, 0.95);
+                                stalker.baseSpeed = fadd(stalker.baseSpeed, 0.0025);
+                                triggerScreenFlash(255, 200, 50, 56);
+                                triggerRumble(160, 1);
+                                showPopup(FUSE_POPUP_LABELS[fusesCollected] || "+1 FUSIBLE");
+                                showRadio(FUSE_RADIO_LABELS[fusesCollected] || "FUSIBLE RECOLECTADO.", 190);
+                            } else if (e.kind === "battery") {
+                                player.battery = toF64(Math.min(100.0, fadd(player.battery, 45.0)));
+                                playSfx("pickup", 0, 0.85);
+                                triggerScreenFlash(50, 220, 255, 48);
+                                triggerRumble(90, 1);
+                                showPopup("+45% BATERIA");
+                                showRadio("BATERIA +45% RECUPERADA.", 140);
+                            } else if (e.kind === "decoy") {
+                                playerDecoys = Math.min(3, playerDecoys + 1);
+                                playSfx("pickup", 0, 0.85);
+                                triggerScreenFlash(90, 215, 255, 42);
+                                triggerRumble(80, 1);
+                                showPopup("+1 SENUELO [L2]");
+                                showRadio("SENUELO RECOLECTADO: Pulsa [L2] para desviar al Acechador.", 170);
+                            } else if (e.kind === "breaker") {
+                                breakerActive = true;
+                                playSfx("breaker", 0, 1.0);
+                                for (let gy = 0; gy < worldGrid.length; gy++) {
+                                    for (let gx = 0; gx < worldGrid[gy].length; gx++) {
+                                        if (worldGrid[gy][gx] === 5) worldGrid[gy][gx] = 0;
+                                    }
+                                }
+                                triggerScreenFlash(60, 255, 110, 62);
+                                triggerRumble(210, 1);
+                                showPopup("REJAS DESBLOQUEADAS");
+                                showRadio("DISYUNTOR ACTIVADO: Se abrieron las rejas de seguridad!", 240);
+                            } else if (e.kind === "note") {
+                                playSfx("pickup", 0, 0.75);
+                                if (!collectedNotes[e.msgIdx]) {
+                                    collectedNotes[e.msgIdx] = true;
+                                    notesFoundCount++;
+                                }
+                                activeNoteIdx = e.msgIdx;
+                                triggerScreenFlash(220, 230, 255, 38);
+                                showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
+                                switchState(STATE_NOTE_VIEW);
+                                return;
+                            }
+                        }
+                    }
+                }
             }
 
-            const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty, dtMs);
+            const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty, dtMs, player.crouched, player.hiding);
             updateStalkerAnim(stalker, player.x, player.y, dtScale, ai.los, ai.blinded);
             const dangerRatio = toF64(Math.max(0.0, Math.min(1.0, (7.0 - toF64(ai.distP)) / 7.0)));
 
@@ -4794,9 +5766,29 @@ Screen.display(() => {
             Draw.rect(sx, topY, hudW, 38, rgba(4, 6, 10, 124));
             Draw.rect(sx, topY + 37, hudW, 2, rgba(70, 95, 115, 120));
 
+            if (player.hiding) {
+                Draw.rect(0, 0, SCREEN_W, 92, rgba(0, 0, 0, 118));
+                Draw.rect(0, SCREEN_H - 92, SCREEN_W, 92, rgba(0, 0, 0, 118));
+                Draw.rect(0, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
+                Draw.rect(SCREEN_W - 68, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
+            }
+            if (activeInteractLabel.length > 0 && !mapOpen) {
+                const prW = Math.min(430, SCREEN_W - sx * 2 - 20);
+                const prX = (SCREEN_W - prW) >> 1;
+                const prY = SCREEN_H - sy - 82;
+                Draw.rect(prX, prY, prW, 30, rgba(8, 10, 16, 118));
+                Draw.rect(prX, prY, prW, 2, rgba(250, 215, 95, 124));
+                fnt.scale = Math.fround(0.70);
+                fnt.color = rgba(250, 225, 115, 128);
+                fnt.print(prX + 14, prY + 6, activeInteractLabel);
+            }
             fnt.scale = Math.fround(0.68);
             fnt.color = rgba(245, 245, 250, 128);
             fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
+            fnt.color = rgba(120, 225, 255, 128);
+            fnt.print(sx + 102, topY + 8, DECOY_HUD_LABELS[playerDecoys] || "SEN:0");
+            fnt.color = player.crouched ? rgba(95, 245, 135, 128) : rgba(175, 185, 200, 120);
+            fnt.print(sx + 178, topY + 8, player.crouched ? "SIGILO" : getActiveChapter().code);
             if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
                 const pendStep = HW3D_STREAM_STEPS[hwStreamStep];
                 Draw.rect(SCREEN_W - sx - 280, topY + 40, 276, 26, rgba(12, 16, 26, 118));

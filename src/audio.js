@@ -70,10 +70,10 @@ function initAudio() {
 
         if (typeof Sound.Stream === "function") {
             const ambPath = resolveFirstExisting([
-                "assets/audio/ambient.wav",
                 "assets/audio/ambient.ogg",
-                "assets/ambient.wav",
-                "assets/ambient.ogg"
+                "assets/audio/ambient.wav",
+                "assets/ambient.ogg",
+                "assets/ambient.wav"
             ]);
             if (ambPath) {
                 try {
@@ -84,8 +84,8 @@ function initAudio() {
                 }
             }
             const chasePath = resolveFirstExisting([
-                "assets/audio/chase.wav",
-                "assets/audio/chase.ogg"
+                "assets/audio/chase.ogg",
+                "assets/audio/chase.wav"
             ]);
             if (chasePath) {
                 try {

@@ -137,7 +137,18 @@ function findNextStepBFS(grid, sx, sy, tx, ty) {
     return bfsOutNode;
 }
 
-function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0, dtMs = 16.6667) {
+function alertStalkerToNoise(stalker, nx, ny, difficulty = 0) {
+    stalker.targetX = toF64(nx);
+    stalker.targetY = toF64(ny);
+    stalker.hasNextNode = false;
+    if (stalker.state === AI_PATROL || stalker.state === AI_INVESTIGATE) {
+        stalker.state = AI_INVESTIGATE;
+    }
+    const minAlert = (difficulty === 1) ? 240 : 210;
+    if (stalker.alertTimer < minAlert) stalker.alertTimer = minAlert;
+}
+
+function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick, dtScale = 1.0, difficulty = 0, dtMs = 16.6667, isCrouched = false, isHiding = false) {
     const px = toF64(player.x);
     const py = toF64(player.y);
     const sx = toF64(stalker.x);
@@ -155,15 +166,22 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
     const flashVisible = player.flashlightOn && ((toF64(player.battery) - 0.0) > 0);
 
     const rangeBonus = isNightmare ? 1.8 : 0.0;
-    const baseDetect = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
+    let baseDetect = flashVisible ? (isSprinting ? 14.0 : 10.5) : (isSprinting ? 9.5 : 4.2);
+    if (isCrouched && !isSprinting) {
+        baseDetect = flashVisible ? 7.4 : 2.1;
+    }
     const detectRange = baseDetect - (-rangeBonus);
 
     aiResult.chaseIntroStarted = false;
     aiResult.chaseHuntStarted = false;
     const stepMs = toF64(dtMs);
-    const spotted = los && ((distP - detectRange) < 0);
-    const heardSprint = isSprinting && ((distP - (11.0 - (-rangeBonus))) < 0);
-    const closeSense = (distP - (isNightmare ? 7.5 : 6.2)) < 0;
+    // Si el jugador está escondido con la linterna apagada, El Acechador no puede verlo
+    // salvo que ya estuviera persiguiéndolo a quemarropa (< 3.0 celdas).
+    const hiddenSafe = isHiding && !flashVisible && (stalker.state !== AI_HUNT || (distP - 3.0) >= 0);
+    const spotted = !hiddenSafe && los && ((distP - detectRange) < 0);
+    const heardSprint = !isHiding && isSprinting && ((distP - (11.0 - (-rangeBonus))) < 0);
+    const closeRadius = isCrouched ? (isNightmare ? 3.2 : 2.4) : (isNightmare ? 7.5 : 6.2);
+    const closeSense = !hiddenSafe && ((distP - closeRadius) < 0);
 
     if (stalker.state === AI_CHASE_INTRO) {
         // Fase de alerta de 7 segundos sincronizada con la intro de chase.ogg
@@ -208,7 +226,9 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
     }
 
     if (stalker.state === AI_PATROL) {
-        const wp = WAYPOINTS[stalker.wpIdx];
+        const wps = (typeof getActiveChapter === "function" && getActiveChapter().waypoints) ? getActiveChapter().waypoints : WAYPOINTS;
+        if (stalker.wpIdx >= wps.length) stalker.wpIdx = 0;
+        const wp = wps[stalker.wpIdx];
         const wx = toF64(wp.x);
         const wy = toF64(wp.y);
         stalker.targetX = wx;
@@ -216,7 +236,7 @@ function updateStalkerAI(stalker, grid, player, isSprinting, isMoving, frameTick
         const dwx = wx - sx;
         const dwy = wy - sy;
         if (((dwx * dwx - (-(dwy * dwy))) - 0.81) < 0) {
-            stalker.wpIdx = (stalker.wpIdx + 1) % WAYPOINTS.length;
+            stalker.wpIdx = (stalker.wpIdx + 1) % wps.length;
         }
     }
 

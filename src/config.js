@@ -25,7 +25,9 @@ const GAME_SETTINGS = {
 // Mostrar panel de diagnostico de rendimiento
     showFps: false,
     // Dificultad: 0 = NORMAL, 1 = PESADILLA
-    difficulty: 0
+    difficulty: 0,
+    // Omitir automaticamente la cinematica introductoria al iniciar Nueva Partida
+    skipIntro: false
 };
 
 const QUALITY_RAYS = [128, 96, 64];

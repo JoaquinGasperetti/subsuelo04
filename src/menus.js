@@ -50,15 +50,25 @@ const TITLE_ITEMS_NORMAL = [
     "OPCIONES Y VIDEO PS2",
     "CONTROLES DUALSHOCK 2",
     "EXPEDIENTE / HISTORIA",
-    "CREDITOS Y HARDWARE"
+    "CREDITOS Y HARDWARE",
+    "CINEMATICAS (TEST)"
 ];
 const TITLE_ITEMS_NIGHTMARE = [
     "NUEVA PARTIDA   < PESADILLA >",
     "OPCIONES Y VIDEO PS2",
     "CONTROLES DUALSHOCK 2",
     "EXPEDIENTE / HISTORIA",
-    "CREDITOS Y HARDWARE"
+    "CREDITOS Y HARDWARE",
+    "CINEMATICAS (TEST)"
 ];
+const CINEMATIC_MENU_ITEMS = [
+    { title: "01. CAP 1 - INTRO RECUPERADA",  meta: "44s | 7 PLANOS | Subsuelo 04" },
+    { title: "02. CAP 2 - TUNELES CALDERAS",  meta: "14s | 3 PLANOS | Nivel -2 y Valdez" },
+    { title: "03. CAP 3 - CONTENCION RITUAL", meta: "14s | 3 PLANOS | Origen Sujeto 04" },
+    { title: "04. FINAL - EVACUACION NORTE",  meta: "22s | 4 PLANOS | Escape a superficie" },
+    { title: "VOLVER AL MENU PRINCIPAL",      meta: "Regresar al titulo" }
+];
+const DECOY_HUD_LABELS = ["SEN:0", "SEN:1", "SEN:2", "SEN:3"];
 const LORE_TABS_OPEN = ["NOTA #01", "NOTA #02", "NOTA #03", "NOTA #04"];
 const LORE_TABS_LOCK = ["BLOQ #01", "BLOQ #02", "BLOQ #03", "BLOQ #04"];
 const PAUSE_REG_LABELS = ["REGISTROS (0/4)", "REGISTROS (1/4)", "REGISTROS (2/4)", "REGISTROS (3/4)", "REGISTROS (4/4)"];
@@ -128,16 +138,16 @@ function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     // Opciones del Menú Principal (cadenas estáticas sin concatenación por frame para QuickJS PS2)
     const items = GAME_SETTINGS.difficulty === 1 ? TITLE_ITEMS_NIGHTMARE : TITLE_ITEMS_NORMAL;
 
-    const listY = py + 100;
-    const rowH = 42;
+    const listY = py + 96;
+    const rowH = 38;
     for (let i = 0; i < items.length; i++) {
         const ry = listY + i * rowH;
         const selected = (i === cursor);
         if (selected) {
-            Draw.rect(px + 18, ry - 4, panelW - 36, 36, COL_SEL_BG);
-            Draw.rect(px + 18, ry - 4, 6, 36, COL_SEL_BAR);
+            Draw.rect(px + 18, ry - 3, panelW - 36, 32, COL_SEL_BG);
+            Draw.rect(px + 18, ry - 3, 6, 32, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(selected ? 0.84 : 0.78);
+        fnt.scale = Math.fround(selected ? 0.80 : 0.74);
         fnt.color = selected ? COL_GOLD : COL_WHITE;
         if (selected) {
             fnt.print(px + 32, ry + 2, ">");
@@ -181,19 +191,20 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
         { label: "AUDIO",          val: audioVal },
         { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
+        { label: "OMITIR INTRO",   val: GAME_SETTINGS.skipIntro ? "SI" : "NO" },
         { label: "GUARDAR",        val: "[X]" }
     ];
 
     const startY = py + 44;
-    const rowH = 33;
+    const rowH = 30;
     for (let i = 0; i < rows.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         if (sel) {
-            Draw.rect(px + 14, ry - 3, panelW - 28, 30, COL_SEL_BG);
-            Draw.rect(px + 14, ry - 3, 5, 30, COL_SEL_BAR);
+            Draw.rect(px + 14, ry - 2, panelW - 28, 27, COL_SEL_BG);
+            Draw.rect(px + 14, ry - 2, 5, 27, COL_SEL_BAR);
         }
-        fnt.scale = Math.fround(0.75);
+        fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         fnt.print(px + 24, ry + 1, rows[i].label);
 
@@ -226,24 +237,25 @@ function drawControlsMenu(screenW, screenH, fnt) {
     drawPanel(px, py, panelW, panelH, "CONTROLES DUALSHOCK 2", fnt);
 
     const bindings = [
-        ["STICK IZQ / D-PAD",  "Caminar y moverse"],
+        ["STICK IZQ / D-PAD",  "Caminar (con inercia)"],
         ["STICK DER / L1-R1",  "Girar la camara"],
-        ["CIRCULO / CUAD.",    "Correr (usa stamina)"],
+        ["X (CRUZ)",           "Interactuar / Esconderse"],
+        ["CIRCULO / ABAJO+O",  "Correr / Giro rapido 180"],
+        ["CUADRADO",           "Agacharse (modo sigilo)"],
         ["TRIANGULO",          "Linterna ON / OFF"],
-        ["SELECT / L2",        "Abrir / cerrar mapa PDA"],
-        ["START",              "Pausar partida"],
-        ["R2",                 "Diagnostico tecnico"]
+        ["L2 / SELECT",        "Lanzar senuelo / Mapa PDA"],
+        ["START / R2",         "Pausa / Diagnostico PS2"]
     ];
 
-    let y = py + 46;
+    let y = py + 44;
     for (let i = 0; i < bindings.length; i++) {
-        Draw.rect(px + 14, y - 3, panelW - 28, 30, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
-        fnt.scale = Math.fround(0.74);
+        Draw.rect(px + 14, y - 2, panelW - 28, 27, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
+        fnt.scale = Math.fround(0.72);
         fnt.color = COL_GOLD;
         fnt.print(px + 20, y + 1, bindings[i][0]);
         fnt.color = COL_WHITE;
         fnt.print(px + 245, y + 1, bindings[i][1]);
-        y += 34;
+        y += 30;
     }
 
     fnt.scale = Math.fround(0.70);
@@ -269,17 +281,22 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
     const title = fromPause ? "REGISTROS RECOLECTADOS" : "EXPEDIENTE - SUBSUELO 04";
     drawPanel(px, py, panelW, panelH, title, fnt);
 
-    // Pestañas superiores para elegir nota 1..4
+    // Pestañas superiores en ventana de 4 (soporta 8 notas de campaña sin desbordar)
+    const tabPage = (selectedNoteIdx >= 4) ? 4 : 0;
     const tabW = ((panelW - 44) / 4) | 0;
-    for (let i = 0; i < LORE_NOTES.length; i++) {
-        const tx = px + 16 + i * (tabW + 4);
+    for (let slot = 0; slot < 4; slot++) {
+        const i = tabPage + slot;
+        if (i >= LORE_NOTES.length) break;
+        const tx = px + 16 + slot * (tabW + 4);
         const sel = (i === selectedNoteIdx);
         const unlocked = !fromPause || collectedNotes[i];
         Draw.rect(tx, py + 44, tabW, 28, sel ? COL_SEL_BG : rgba(20, 18, 24, 110));
         if (sel) Draw.rect(tx, py + 70, tabW, 2, COL_SEL_BAR);
         fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : (unlocked ? COL_WHITE : COL_MUTED);
-        fnt.print(tx + 8, py + 48, unlocked ? LORE_TABS_OPEN[i] : LORE_TABS_LOCK[i]);
+        const openLbl = ["NOTA #0", String(i + 1)].join("");
+        const lockLbl = ["BLOQ #0", String(i + 1)].join("");
+        fnt.print(tx + 8, py + 48, unlocked ? openLbl : lockLbl);
     }
 
     const note = LORE_NOTES[selectedNoteIdx];
@@ -309,7 +326,9 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
     Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_WHITE;
-    fnt.print(px + 18, footY, "[IZQ/DER] NOTA   [X/CIRCULO] VOLVER");
+    fnt.print(px + 18, footY, fromPause
+        ? "[IZQ/DER] NOTA   [X/CIRCULO] VOLVER"
+        : "[IZQ/DER] NOTA   [TRIANG.] VER INTRO   [X/O] VOLVER");
 }
 
 function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
@@ -497,5 +516,50 @@ function drawPadDisconnectedOverlay(screenW, screenH, fnt) {
     fnt.color = COL_GOLD;
     fnt.print(px + 20, py + 52, "Conecta un DualShock 2 en el");
     fnt.print(px + 20, py + 84, "Puerto 1 para continuar.");
+}
+
+function drawCinematicsMenu(screenW, screenH, cursor, fnt) {
+    const { sx, sy } = getSafeMargins();
+    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
+
+    const panelW = screenW - sx * 2 - 12;
+    const panelH = screenH - sy * 2 - 12;
+    const px = (screenW - panelW) >> 1;
+    const py = (screenH - panelH) >> 1;
+
+    drawPanel(px, py, panelW, panelH, "CINEMATICAS (MODO TEST)", fnt);
+
+    fnt.scale = Math.fround(0.70);
+    fnt.color = COL_MUTED;
+    fnt.print(px + 20, py + 48, "Selecciona una secuencia para reproducirla (START 1s para omitir):");
+
+    const startY = py + 76;
+    const rowH = 52;
+    for (let i = 0; i < CINEMATIC_MENU_ITEMS.length; i++) {
+        const ry = startY + i * rowH;
+        const sel = (i === cursor);
+        const item = CINEMATIC_MENU_ITEMS[i];
+        Draw.rect(px + 16, ry - 3, panelW - 32, 46, sel ? COL_SEL_BG : rgba(18, 15, 22, 105));
+        if (sel) Draw.rect(px + 16, ry - 3, 6, 46, COL_SEL_BAR);
+
+        fnt.scale = Math.fround(sel ? 0.76 : 0.72);
+        fnt.color = sel ? COL_GOLD : COL_WHITE;
+        if (sel) {
+            fnt.print(px + 26, ry + 1, ">");
+            fnt.print(px + 46, ry + 1, item.title);
+        } else {
+            fnt.print(px + 42, ry + 1, item.title);
+        }
+
+        fnt.scale = Math.fround(0.70);
+        fnt.color = sel ? COL_CYAN : COL_MUTED;
+        fnt.print(px + 42, ry + 23, item.meta);
+    }
+
+    const footY = py + panelH - 34;
+    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    fnt.scale = Math.fround(0.70);
+    fnt.color = COL_WHITE;
+    fnt.print(px + 18, footY, "[D-PAD] ELEGIR   [X] REPRODUCIR   [O] VOLVER");
 }
 

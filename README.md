@@ -306,9 +306,10 @@ El `athena.elf` incluido (3.753.784 bytes) expone `Render.init/begin/setView`, `
 - [x] Migración de pistas musicales a OGG Vorbis (`ambient.ogg` y `chase.ogg`).
 - [x] Flujo modular de desarrollo (`src/` + `tools/build_main.py` / `tools/split_main.py`) con compilación verificada byte a byte hacia `main.js`.
 - [ ] Grabar y convertir a PS2 SPU2 ADPCM (`.adp`) los 9 efectos cortos declarados en `SFX_PATHS` (`step`, `flashlight`, `pickup`, `breaker`, `gate_locked`, `heartbeat`, `jumpscare`, `ui_move`, `ui_select`).
-- [ ] Agregar cinemática de evacuación (apertura de compuerta Norte al reunir los 4 fusibles) reutilizando `startCinematic(...)`.
-- [ ] Validar en hardware PS2 real (OPL USB 1.1 y DVD-R) los 44 segundos completos de la intro y el streaming OGG + ADPCM simultáneo con telemetría `R2` (FPS, EE RAM y GS VRAM).
-- [ ] Añadir opción en Menú de Opciones para omitir automáticamente la intro en partidas siguientes o verla desde Expediente.
+- [x] Cinemática de evacuación (`CINEMATIC_EVAC`, 22 s) al abrir la compuerta Norte con los 4 fusibles reutilizando `startCinematic(...)`.
+- [x] Opción `OMITIR INTRO` guardada en Memory Card desde Menú de Opciones y repetición de la intro con `Triángulo` desde Expediente.
+- [x] Prioridad de carga `.ogg` sobre `.wav` y etiquetas actualizadas en pantalla de arranque.
+- [ ] Validar en hardware PS2 real (OPL USB 1.1 y DVD-R) los 44 segundos completos de la intro, la evacuación y el streaming OGG + ADPCM simultáneo con telemetría `R2` (FPS, EE RAM y GS VRAM).
 
 ---
 

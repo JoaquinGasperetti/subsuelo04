@@ -141,26 +141,62 @@ const STATE_NOTE_VIEW = 10;
 const STATE_LOADING   = 11;
 const STATE_SPLASH      = 12;
 const STATE_MAP_LOADING = 13;
-const STATE_CINEMATIC   = 14;
+const STATE_CINEMATIC       = 14;
+const STATE_CINEMATICS_MENU = 15;
 
 let gameState = STATE_SPLASH;
-let pendingIntroCinematic = false;
+let pendingCinematicSeq = null;
+let pendingCinematicNext = STATE_PLAY;
 
-function startPlayWithLoading(playIntro = false) {
-    resetGame();
-    pendingIntroCinematic = !!playIntro;
+function getChapterIntroCinematic(chapterIdx) {
+    if (chapterIdx === 1) return CINEMATIC_CH2_INTRO;
+    if (chapterIdx === 2) return CINEMATIC_CH3_INTRO;
+    return CINEMATIC_INTRO;
+}
+
+function startCinematicWithLoading(sequence, nextState) {
+    const chIdx = (sequence && sequence.chapterIdx !== undefined) ? sequence.chapterIdx : 0;
+    if (activeChapterIdx !== chIdx || hwLoadedChapterIdx !== chIdx) {
+        resetGame(chIdx);
+        prepareChapter3D(chIdx);
+    }
+    pendingCinematicSeq = sequence;
+    pendingCinematicNext = nextState;
     if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
         mapLoadPhase = 0;
         switchState(STATE_MAP_LOADING);
     } else {
         if (hw3dReady) buildHwEntityTransforms();
-        if (pendingIntroCinematic) {
-            pendingIntroCinematic = false;
-            startCinematic(CINEMATIC_INTRO, STATE_PLAY);
+        pendingCinematicSeq = null;
+        startCinematic(sequence, nextState);
+    }
+}
+
+function startChapter(chapterIdx, playIntro = true) {
+    const need3DReload = (hwLoadedChapterIdx !== chapterIdx);
+    resetGame(chapterIdx);
+    if (need3DReload) prepareChapter3D(chapterIdx);
+    const shouldPlayIntro = !!playIntro && !GAME_SETTINGS.skipIntro;
+    pendingCinematicSeq = shouldPlayIntro ? getChapterIntroCinematic(chapterIdx) : null;
+    pendingCinematicNext = STATE_PLAY;
+    if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
+        mapLoadPhase = 0;
+        switchState(STATE_MAP_LOADING);
+    } else {
+        if (hw3dReady) buildHwEntityTransforms();
+        if (pendingCinematicSeq) {
+            const seq = pendingCinematicSeq;
+            const nextSt = pendingCinematicNext;
+            pendingCinematicSeq = null;
+            startCinematic(seq, nextSt);
         } else {
             switchState(STATE_PLAY);
         }
     }
+}
+
+function startPlayWithLoading(playIntro = false) {
+    startChapter(0, playIntro);
 }
 let returnState = STATE_TITLE;
 let frameTick = 0;
@@ -175,6 +211,7 @@ let pauseCursor = 0;
 let optionsCursor = 0;
 let endCursor = 0;
 let loreTabIdx = 0;
+let cinematicsCursor = 0;
 let activeNoteIdx = 0;
 let saveFeedbackTimer = 0;
 let menuStickCooldown = 0;
@@ -194,6 +231,15 @@ let currentFov = toF64(0.90);
 let flashlightWarmup = toF64(1.0);
 let exhausted = false;
 let bumpCooldown = 0;
+let playerVelX = toF64(0.0);
+let playerVelY = toF64(0.0);
+let quickTurnRem = toF64(0.0);
+let playerDecoys = 1;
+let decoyCooldown = 0;
+let activeRadioTriggers = [];
+let activeInteractEnt = null;
+let activeInteractLabel = "";
+let activeInteractIsExit = false;
 let debugMode = 0; // R2 en juego: 0 apagado, 1 datos, 2 datos + paredes magenta
 
 let worldGrid = createWorldGrid();
@@ -347,19 +393,29 @@ function readMenuDir() {
     return { dx, dy };
 }
 
-function resetGame() {
-    worldGrid = createWorldGrid();
+function resetGame(chapterIdx) {
+    activeChapterIdx = (chapterIdx !== undefined) ? chapterIdx : 0;
+    const ch = getActiveChapter();
+    worldGrid = createWorldGrid(activeChapterIdx);
     breakerActive = false;
     fusesCollected = 0;
-    collectedNotes = [false, false, false, false];
+    collectedNotes = [false, false, false, false, false, false, false, false];
     notesFoundCount = 0;
-    elapsedMs = 0;
+    if (activeChapterIdx === 0) elapsedMs = 0;
     mapOpen = false;
     mapAnim = toF64(0.0);
     currentFov = toF64(0.90);
     flashlightWarmup = toF64(0.25);
     exhausted = false;
     bumpCooldown = 0;
+    playerVelX = toF64(0.0);
+    playerVelY = toF64(0.0);
+    quickTurnRem = toF64(0.0);
+    playerDecoys = 1;
+    decoyCooldown = 0;
+    activeInteractEnt = null;
+    activeInteractLabel = "";
+    activeInteractIsExit = false;
     flashTint.alpha = 0;
     introFade = 124;
     popupTimer = 0;
@@ -368,17 +424,23 @@ function resetGame() {
 
     const isNightmare = GAME_SETTINGS.difficulty === 1;
 
-    player.x = toF64(10.0);
-    player.y = toF64(1.8);
-    player.ang = toF64(Math.PI * 0.5);
+    player.x = toF64(ch.playerSpawn.x);
+    player.y = toF64(ch.playerSpawn.y);
+    player.ang = toF64(ch.playerSpawn.ang);
+    player.eyeH = toF64(WORLD_EYE_H);
+    player.pitchY = toF64(0.0);
+    player.crouched = false;
+    player.hiding = false;
+    player.hideReturnX = player.x;
+    player.hideReturnY = player.y;
     player.bobPhase = toF64(0.0);
     player.battery = toF64(isNightmare ? 85.0 : 100.0);
     player.flashlightOn = true;
     player.stamina = toF64(100.0);
 
-    stalker.x = toF64(10.5);
-    stalker.y = toF64(16.5);
-    stalker.baseSpeed = toF64(isNightmare ? 0.029 : 0.024);
+    stalker.x = toF64(ch.stalkerSpawn.x);
+    stalker.y = toF64(ch.stalkerSpawn.y);
+    stalker.baseSpeed = toF64(isNightmare ? ch.stalkerSpawn.speedNightmare : ch.stalkerSpawn.speedNormal);
     stalker.state = AI_PATROL;
     stalker.targetX = toF64(10.0);
     stalker.targetY = toF64(10.0);
@@ -388,27 +450,38 @@ function resetGame() {
     stalker.hasNextNode = false;
     resetStalkerAnim(stalker, stalker.x, stalker.y);
 
-    entities = [
-        { kind: "fuse", x: toF64(10.0), y: toF64(17.5), taken: false },
-        { kind: "fuse", x: toF64(10.0), y: toF64(9.5),  taken: false },
-        { kind: "fuse", x: toF64(2.5),  y: toF64(17.5), taken: false },
-        { kind: "fuse", x: toF64(17.5), y: toF64(17.5), taken: false },
+    entities = [];
+    for (let i = 0; i < ch.entities.length; i++) {
+        const src = ch.entities[i];
+        entities.push({
+            kind: src.kind,
+            x: toF64(src.x),
+            y: toF64(src.y),
+            msgIdx: src.msgIdx,
+            faceAng: src.faceAng,
+            name: src.name,
+            dialog: src.dialog,
+            spoken: false,
+            taken: false
+        });
+    }
 
-        { kind: "breaker", x: toF64(10.0), y: toF64(11.5), taken: false },
+    activeRadioTriggers = [];
+    for (let i = 0; i < ch.radioTriggers.length; i++) {
+        const rt = ch.radioTriggers[i];
+        activeRadioTriggers.push({
+            x: toF64(rt.x),
+            y: toF64(rt.y),
+            radiusSq: toF64(rt.radius * rt.radius),
+            text: rt.text,
+            duration: rt.duration,
+            fired: false
+        });
+    }
 
-        { kind: "battery", x: toF64(8.5),  y: toF64(5.5),  taken: false },
-        { kind: "battery", x: toF64(1.5),  y: toF64(2.5),  taken: false },
-        { kind: "battery", x: toF64(18.5), y: toF64(2.5),  taken: false },
-
-        { kind: "note", x: toF64(10.0), y: toF64(3.5),  taken: false, msgIdx: 0 },
-        { kind: "note", x: toF64(8.5),  y: toF64(14.5), taken: false, msgIdx: 1 },
-        { kind: "note", x: toF64(3.5),  y: toF64(8.5),  taken: false, msgIdx: 2 },
-        { kind: "note", x: toF64(16.5), y: toF64(8.5),  taken: false, msgIdx: 3 }
-    ];
-
-    showPopup("SECTOR SUBSUELO 04", 90);
-    showRadio("OBJETIVO: Activa el Disyuntor rojo, junta 4 Fusibles y escapa al Norte.", 260);
-    if (frameTick >= 30) triggerRumble(0, 0);
+    showPopup(ch.title, 100);
+    showRadio(ch.objectiveBreaker, 210);
+    if (hw3dReady) buildHwEntityTransforms();
 }
 
 resetGame();
@@ -488,9 +561,11 @@ Screen.display(() => {
             drawMapLoadingScreen(SCREEN_W, SCREEN_H, fnt);
             if (pad.justPressed(Pads.CIRCLE)) {
                 GAME_SETTINGS.qualityIndex = 1;
-                if (pendingIntroCinematic) {
-                    pendingIntroCinematic = false;
-                    startCinematic(CINEMATIC_INTRO, STATE_PLAY);
+                if (pendingCinematicSeq) {
+                    const seq = pendingCinematicSeq;
+                    const nextSt = pendingCinematicNext;
+                    pendingCinematicSeq = null;
+                    startCinematic(seq, nextSt);
                 } else {
                     switchState(STATE_PLAY);
                 }
@@ -505,9 +580,11 @@ Screen.display(() => {
                 hwLastFlashState = -1;
                 hwPlayFrameCount = 0;
                 buildHwEntityTransforms();
-                if (pendingIntroCinematic) {
-                    pendingIntroCinematic = false;
-                    startCinematic(CINEMATIC_INTRO, STATE_PLAY);
+                if (pendingCinematicSeq) {
+                    const seq = pendingCinematicSeq;
+                    const nextSt = pendingCinematicNext;
+                    pendingCinematicSeq = null;
+                    startCinematic(seq, nextSt);
                 } else {
                     switchState(STATE_PLAY);
                 }
@@ -547,7 +624,7 @@ Screen.display(() => {
             drawTitleMenu(SCREEN_W, SCREEN_H, titleCursor, frameTick, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) { titleCursor = (titleCursor + nav.dy + 5) % 5; playSfx("ui_move", 0, 0.7); }
+            if (nav.dy !== 0) { titleCursor = (titleCursor + nav.dy + 6) % 6; playSfx("ui_move", 0, 0.7); }
             if (titleCursor === 0 && nav.dx !== 0) {
                 GAME_SETTINGS.difficulty = (GAME_SETTINGS.difficulty + 1) & 1;
             }
@@ -570,6 +647,10 @@ Screen.display(() => {
                 } else if (titleCursor === 4) {
                     returnState = STATE_TITLE;
                     switchState(STATE_CREDITS);
+                } else if (titleCursor === 5) {
+                    returnState = STATE_TITLE;
+                    cinematicsCursor = 0;
+                    switchState(STATE_CINEMATICS_MENU);
                 }
             }
         } else if (gameState === STATE_OPTIONS) {
@@ -578,9 +659,9 @@ Screen.display(() => {
             drawOptionsMenu(SCREEN_W, SCREEN_H, optionsCursor, saveFeedbackTimer, fnt);
 
             const nav = readMenuDir();
-            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 9) % 9; playSfx("ui_move", 0, 0.7); }
+            if (nav.dy !== 0) { optionsCursor = (optionsCursor + nav.dy + 10) % 10; playSfx("ui_move", 0, 0.7); }
 
-            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 8 ? 1 : 0);
+            const adjust = nav.dx !== 0 ? nav.dx : (pad.justPressed(Pads.CROSS) && optionsCursor < 9 ? 1 : 0);
             if (adjust !== 0) {
                 if (optionsCursor === 0) {
                     GAME_SETTINGS.qualityIndex = (GAME_SETTINGS.qualityIndex + adjust + 3) % 3;
@@ -611,10 +692,12 @@ Screen.display(() => {
                 } else if (optionsCursor === 7) {
                     GAME_SETTINGS.showFps = !GAME_SETTINGS.showFps;
                     if (GAME_SETTINGS.showFps) ensureFpsCounter();
+                } else if (optionsCursor === 8) {
+                    GAME_SETTINGS.skipIntro = !GAME_SETTINGS.skipIntro;
                 }
             }
 
-            if (pad.justPressed(Pads.CROSS) && optionsCursor === 8) {
+            if (pad.justPressed(Pads.CROSS) && optionsCursor === 9) {
                 saveGameData();
                 saveFeedbackTimer = 90;
                 switchState(returnState);
@@ -632,6 +715,11 @@ Screen.display(() => {
             drawLoreMenu(SCREEN_W, SCREEN_H, collectedNotes, loreTabIdx, returnState === STATE_PAUSE, fnt);
             const nav = readMenuDir();
             if (nav.dx !== 0) loreTabIdx = (loreTabIdx + nav.dx + LORE_NOTES.length) % LORE_NOTES.length;
+            if (returnState === STATE_TITLE && pad.justPressed(Pads.TRIANGLE)) {
+                playSfx("ui_select", 0, 0.85);
+                startCinematicWithLoading(CINEMATIC_INTRO, STATE_LORE);
+                return;
+            }
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.CIRCLE) || pad.justPressed(Pads.START)) {
                 switchState(returnState);
             }
@@ -640,6 +728,34 @@ Screen.display(() => {
             drawCreditsMenu(SCREEN_W, SCREEN_H, MODE_INFO, fnt);
             if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.CIRCLE) || pad.justPressed(Pads.START)) {
                 switchState(returnState);
+            }
+        } else if (gameState === STATE_CINEMATICS_MENU) {
+            render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.10, frameTick, false, 0.90, 1.0, 1.0, 0.0);
+            drawCinematicsMenu(SCREEN_W, SCREEN_H, cinematicsCursor, fnt);
+            const nav = readMenuDir();
+            if (nav.dy !== 0) {
+                cinematicsCursor = (cinematicsCursor + nav.dy + CINEMATIC_MENU_ITEMS.length) % CINEMATIC_MENU_ITEMS.length;
+                playSfx("ui_move", 0, 0.7);
+            }
+            if (pad.justPressed(Pads.CROSS) || pad.justPressed(Pads.START)) {
+                playSfx("ui_select", 0, 0.85);
+                if (cinematicsCursor === 0) {
+                    startCinematicWithLoading(CINEMATIC_INTRO, STATE_CINEMATICS_MENU);
+                    return;
+                } else if (cinematicsCursor === 1) {
+                    startCinematicWithLoading(CINEMATIC_CH2_INTRO, STATE_CINEMATICS_MENU);
+                    return;
+                } else if (cinematicsCursor === 2) {
+                    startCinematicWithLoading(CINEMATIC_CH3_INTRO, STATE_CINEMATICS_MENU);
+                    return;
+                } else if (cinematicsCursor === 3) {
+                    startCinematicWithLoading(CINEMATIC_EVAC, STATE_CINEMATICS_MENU);
+                    return;
+                } else {
+                    switchState(STATE_TITLE);
+                }
+            } else if (pad.justPressed(Pads.CIRCLE)) {
+                switchState(STATE_TITLE);
             }
         } else if (gameState === STATE_NOTE_VIEW) {
             render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.10, frameTick, fusesCollected === 4, currentFov, flashlightWarmup, mapAnim, 0.0);
@@ -672,7 +788,7 @@ Screen.display(() => {
                 switchState(STATE_PAUSE);
                 return;
             }
-            if (pad.justPressed(Pads.SELECT) || pad.justPressed(Pads.L2)) {
+            if (pad.justPressed(Pads.SELECT)) {
                 mapOpen = !mapOpen;
             }
             if (pad.justPressed(Pads.R2)) {
@@ -685,6 +801,35 @@ Screen.display(() => {
                 if (player.flashlightOn) flashlightWarmup = toF64(0.25);
                 playSfx("flashlight", 0, 0.85);
             }
+            if (!player.hiding && pad.justPressed(Pads.SQUARE)) {
+                player.crouched = !player.crouched;
+            }
+            if (decoyCooldown > 0) decoyCooldown--;
+            if (!player.hiding && pad.justPressed(Pads.L2) && decoyCooldown === 0) {
+                if (playerDecoys > 0) {
+                    playerDecoys--;
+                    decoyCooldown = 45;
+                    const tDirX = toF64(Math.cos(player.ang));
+                    const tDirY = toF64(Math.sin(player.ang));
+                    let tx = player.x;
+                    let ty = player.y;
+                    for (let s = 1; s <= 10; s++) {
+                        const cx = fadd(player.x, tDirX * (s * 0.5));
+                        const cy = fadd(player.y, tDirY * (s * 0.5));
+                        if (!isPosWalkable(worldGrid, cx, cy, 0.25)) break;
+                        tx = cx;
+                        ty = cy;
+                    }
+                    alertStalkerToNoise(stalker, tx, ty, GAME_SETTINGS.difficulty);
+                    playSfx("pickup", 0, 0.9);
+                    triggerRumble(80, 1);
+                    triggerScreenFlash(90, 215, 255, 34);
+                    showPopup("SENUELO LANZADO");
+                    showRadio("DISTRACCION: El Acechador se dirige al ruido del senuelo.", 160);
+                } else {
+                    showPopup("SIN SENUELOS");
+                }
+            }
 
             if (mapOpen) mapAnim = toF64(Math.min(1.0, fadd(mapAnim, 0.11 * dtScale)));
             else mapAnim = toF64(Math.max(0.0, mapAnim - 0.13 * dtScale));
@@ -693,14 +838,9 @@ Screen.display(() => {
                 flashlightWarmup = toF64(Math.min(1.0, fadd(flashlightWarmup, 0.14 * dtScale)));
             }
 
-            const rx = toF64((pad.rx || 0) / 128.0);
-            const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
-            const turnSpeed = (mapOpen ? (baseTurn * 0.70) : baseTurn) * dtScale;
-            if ((Math.abs(rx) - STICK_DEADZONE) > 0) player.ang = fadd(player.ang, rx * turnSpeed);
-            if (pad.pressed(Pads.L1)) player.ang = player.ang - turnSpeed;
-            if (pad.pressed(Pads.R1)) player.ang = fadd(player.ang, turnSpeed);
-            if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
-            else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
+            const targetEyeH = player.hiding ? toF64(1.18) : (player.crouched ? toF64(1.02) : toF64(WORLD_EYE_H));
+            const curEyeH = toF64(player.eyeH !== undefined ? player.eyeH : WORLD_EYE_H);
+            player.eyeH = fadd(curEyeH, (targetEyeH - curEyeH) * Math.min(1.0, 0.22 * dtScale));
 
             let fwd = F64_ZERO, strafe = F64_ZERO;
             const lx = toF64((pad.lx || 0) / 128.0);
@@ -712,8 +852,27 @@ Screen.display(() => {
             if (pad.pressed(Pads.LEFT)) strafe = toF64(-1.0);
             if (pad.pressed(Pads.RIGHT)) strafe = toF64(1.0);
 
-            const isMoving = ((Math.abs(fwd) - 0.05) > 0) || ((Math.abs(strafe) - 0.05) > 0);
-            const wantSprint = (pad.pressed(Pads.CIRCLE) || pad.pressed(Pads.SQUARE)) && isMoving && !mapOpen;
+            if (!player.hiding && (fwd - (-0.5)) < 0 && pad.justPressed(Pads.CIRCLE) && (quickTurnRem - 0.01) <= 0) {
+                quickTurnRem = toF64(Math.PI);
+            }
+            if ((quickTurnRem - 0.01) > 0) {
+                const qtStep = Math.min(quickTurnRem, toF64(0.26 * dtScale));
+                player.ang = fadd(player.ang, qtStep);
+                quickTurnRem = quickTurnRem - qtStep;
+            } else {
+                const rx = toF64((pad.rx || 0) / 128.0);
+                const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
+                const turnSpeed = (mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn) * dtScale;
+                if ((Math.abs(rx) - STICK_DEADZONE) > 0) player.ang = fadd(player.ang, rx * turnSpeed);
+                if (pad.pressed(Pads.L1)) player.ang = player.ang - turnSpeed;
+                if (pad.pressed(Pads.R1)) player.ang = fadd(player.ang, turnSpeed);
+            }
+            if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
+            else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
+
+            const isMovingInput = !player.hiding && (((Math.abs(fwd) - 0.05) > 0) || ((Math.abs(strafe) - 0.05) > 0));
+            const wantSprint = !player.hiding && pad.pressed(Pads.CIRCLE) && (fwd - (-0.3)) > 0 && isMovingInput && !mapOpen;
+            if (wantSprint && player.crouched) player.crouched = false;
             const isSprinting = wantSprint && !exhausted && ((player.stamina - 2.0) > 0);
 
             if (isSprinting) {
@@ -724,42 +883,49 @@ Screen.display(() => {
                 if (exhausted && ((player.stamina - 32.0) >= 0)) exhausted = false;
             }
 
-            // FOV constante para evitar mareo 3D al correr o frenar
             currentFov = toF64(0.90);
 
-            const speed = (isSprinting ? 0.082 : (mapOpen ? 0.032 : 0.048)) * dtScale;
+            const targetSpeed = player.hiding ? 0.0 : (isSprinting ? 0.082 : (player.crouched ? 0.028 : (mapOpen ? 0.032 : 0.048)));
             const dirX = toF64(Math.cos(player.ang));
             const dirY = toF64(Math.sin(player.ang));
-            const dx = (dirX * fwd - dirY * strafe) * speed;
-            const dy = fadd(dirY * fwd, dirX * strafe) * speed;
+            const tgtVx = (dirX * fwd - dirY * strafe) * targetSpeed;
+            const tgtVy = fadd(dirY * fwd, dirX * strafe) * targetSpeed;
+            const accel = Math.min(1.0, (isMovingInput ? 0.26 : 0.30) * dtScale);
+            playerVelX = fadd(playerVelX, (tgtVx - playerVelX) * accel);
+            playerVelY = fadd(playerVelY, (tgtVy - playerVelY) * accel);
+            const dx = playerVelX * dtScale;
+            const dy = playerVelY * dtScale;
+            const isMoving = !player.hiding && (((Math.abs(playerVelX) - 0.006) > 0) || ((Math.abs(playerVelY) - 0.006) > 0));
 
             let bumpedGate = false;
-            const nextX = fadd(player.x, dx);
-            const resolvedX = movePlayerAxis(worldGrid, player.x, player.y, dx, true, 0.25);
-            if (Math.abs(resolvedX - nextX) > 0.0001 && getCell(worldGrid, (fadd(nextX, (dx > 0) ? 0.28 : -0.28)) | 0, player.y | 0) === 5) {
-                bumpedGate = true;
+            if (!player.hiding) {
+                const nextX = fadd(player.x, dx);
+                const resolvedX = movePlayerAxis(worldGrid, player.x, player.y, dx, true, 0.25);
+                if (Math.abs(resolvedX - nextX) > 0.0001 && getCell(worldGrid, (fadd(nextX, (dx > 0) ? 0.28 : -0.28)) | 0, player.y | 0) === 5) {
+                    bumpedGate = true;
+                }
+                player.x = resolvedX;
+                const nextY = fadd(player.y, dy);
+                const resolvedY = movePlayerAxis(worldGrid, player.x, player.y, dy, false, 0.25);
+                if (Math.abs(resolvedY - nextY) > 0.0001 && getCell(worldGrid, player.x | 0, (fadd(nextY, (dy > 0) ? 0.28 : -0.28)) | 0) === 5) {
+                    bumpedGate = true;
+                }
+                player.y = resolvedY;
             }
-            player.x = resolvedX;
-            const nextY = fadd(player.y, dy);
-            const resolvedY = movePlayerAxis(worldGrid, player.x, player.y, dy, false, 0.25);
-            if (Math.abs(resolvedY - nextY) > 0.0001 && getCell(worldGrid, player.x | 0, (fadd(nextY, (dy > 0) ? 0.28 : -0.28)) | 0) === 5) {
-                bumpedGate = true;
-            }
-            player.y = resolvedY;
             if (bumpCooldown > 0) bumpCooldown--;
             if (bumpedGate && bumpCooldown === 0) {
                 bumpCooldown = 60;
                 playSfx("gate_locked", 0, 0.9);
                 triggerRumble(110, 1);
                 triggerScreenFlash(200, 60, 20, 42);
-                showRadio("REJA BLOQUEADA: Activa el Disyuntor rojo en el sector central.", 160);
+                showRadio("REJA BLOQUEADA: Activa el disyuntor central para liberar el paso.", 160);
             }
 
             if (isMoving) {
                 const prevStepCycle = (player.bobPhase / 3.14159) | 0;
-                player.bobPhase = fadd(player.bobPhase, (isSprinting ? 0.28 : 0.16) * dtScale);
+                player.bobPhase = fadd(player.bobPhase, (isSprinting ? 0.28 : (player.crouched ? 0.10 : 0.16)) * dtScale);
                 const curStepCycle = (player.bobPhase / 3.14159) | 0;
-                if (curStepCycle !== prevStepCycle) {
+                if (curStepCycle !== prevStepCycle && !player.crouched) {
                     playSfx("step", (curStepCycle & 1) ? -18 : 18, isSprinting ? 0.85 : 0.55);
                 }
             }
@@ -769,63 +935,151 @@ Screen.display(() => {
                 player.battery = toF64(Math.max(0.0, player.battery - batDrain * dtScale));
             }
 
-            for (let i = 0; i < entities.length; i++) {
-                const e = entities[i];
-                if (e.taken) continue;
-                const edx = player.x - toF64(e.x);
-                const edy = player.y - toF64(e.y);
-                if (((edx * edx - (-(edy * edy))) - 0.81) < 0) {
-                    e.taken = true;
-                    if (e.kind === "fuse") {
-                        fusesCollected++;
-                        playSfx("pickup", 0, 0.95);
-                        stalker.baseSpeed = fadd(stalker.baseSpeed, 0.003);
-                        triggerScreenFlash(255, 200, 50, 56);
-                        triggerRumble(160, 1);
-                        showPopup(FUSE_POPUP_LABELS[fusesCollected] || "+1 FUSIBLE");
-                        showRadio(FUSE_RADIO_LABELS[fusesCollected] || "FUSIBLE RECOLECTADO.", 190);
-                    } else if (e.kind === "battery") {
-                        player.battery = toF64(Math.min(100.0, fadd(player.battery, 45.0)));
-                        playSfx("pickup", 0, 0.85);
-                        triggerScreenFlash(50, 220, 255, 48);
-                        triggerRumble(90, 1);
-                        showPopup("+45% BATERIA");
-                        showRadio("BATERIA +45% RECUPERADA.", 140);
-                    } else if (e.kind === "breaker") {
-                        breakerActive = true;
-                        playSfx("breaker", 0, 1.0);
-                        for (let gy = 0; gy < worldGrid.length; gy++) {
-                            for (let gx = 0; gx < worldGrid[gy].length; gx++) {
-                                if (worldGrid[gy][gx] === 5) worldGrid[gy][gx] = 0;
-                            }
-                        }
-                        triggerScreenFlash(60, 255, 110, 62);
-                        triggerRumble(210, 1);
-                        showPopup("REJAS DESBLOQUEADAS");
-                        showRadio("DISYUNTOR ACTIVADO: Se abrieron las rejas Este y Oeste!", 240);
-                    } else if (e.kind === "note") {
-                        playSfx("pickup", 0, 0.75);
-                        if (!collectedNotes[e.msgIdx]) {
-                            collectedNotes[e.msgIdx] = true;
-                            notesFoundCount++;
-                        }
-                        activeNoteIdx = e.msgIdx;
-                        triggerScreenFlash(220, 230, 255, 38);
-                        showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
-                        switchState(STATE_NOTE_VIEW);
-                        return;
+            if ((frameTick % 10) === 0) {
+                for (let i = 0; i < activeRadioTriggers.length; i++) {
+                    const rt = activeRadioTriggers[i];
+                    if (rt.fired) continue;
+                    const rdx = player.x - rt.x;
+                    const rdy = player.y - rt.y;
+                    if (((rdx * rdx - (-(rdy * rdy))) - rt.radiusSq) < 0) {
+                        rt.fired = true;
+                        showRadio(rt.text, rt.duration);
                     }
                 }
             }
 
-            if (fusesCollected === 4 && ((player.y - 1.45) < 0) && ((player.x - 8.5) > 0) && ((player.x - 11.5) < 0)) {
-                recordEscape((elapsedMs / 1000) | 0, GAME_SETTINGS.difficulty);
-                endCursor = 0;
-                switchState(STATE_WIN);
-                return;
+            activeInteractEnt = null;
+            activeInteractLabel = "";
+            activeInteractIsExit = false;
+
+            if (player.hiding) {
+                activeInteractLabel = "[X] SALIR DEL ESCONDITE";
+                if (pad.justPressed(Pads.CROSS)) {
+                    player.hiding = false;
+                    player.x = player.hideReturnX;
+                    player.y = player.hideReturnY;
+                    playSfx("ui_select", 0, 0.7);
+                }
+            } else {
+                let bestDistSq = toF64(1.85);
+                for (let i = 0; i < entities.length; i++) {
+                    const e = entities[i];
+                    if (e.taken) continue;
+                    const edx = player.x - toF64(e.x);
+                    const edy = player.y - toF64(e.y);
+                    const d2 = edx * edx - (-(edy * edy));
+                    if ((d2 - bestDistSq) < 0) {
+                        bestDistSq = d2;
+                        activeInteractEnt = e;
+                    }
+                }
+                if (fusesCollected === 4 && ((player.y - 1.85) < 0) && ((player.x - 8.2) > 0) && ((player.x - 11.8) < 0)) {
+                    activeInteractIsExit = true;
+                    activeInteractLabel = (activeChapterIdx < CHAPTERS.length - 1)
+                        ? "[X] ABRIR COMPUERTA AL SIGUIENTE SECTOR"
+                        : "[X] ACTIVAR ASCENSOR Y ESCAPAR";
+                } else if (activeInteractEnt) {
+                    const k = activeInteractEnt.kind;
+                    if (k === "fuse") activeInteractLabel = "[X] TOMAR FUSIBLE";
+                    else if (k === "battery") activeInteractLabel = "[X] TOMAR BATERIA (+45%)";
+                    else if (k === "breaker") activeInteractLabel = "[X] ACTIVAR DISYUNTOR CENTRAL";
+                    else if (k === "note") activeInteractLabel = "[X] LEER REGISTRO";
+                    else if (k === "decoy") activeInteractLabel = "[X] TOMAR SENUELO";
+                    else if (k === "locker") activeInteractLabel = "[X] ESCONDERSE";
+                    else if (k === "npc") activeInteractLabel = "[X] HABLAR CON VALDEZ";
+                }
+
+                if (pad.justPressed(Pads.CROSS)) {
+                    if (activeInteractIsExit) {
+                        if (activeChapterIdx < CHAPTERS.length - 1) {
+                            const nextCh = activeChapterIdx + 1;
+                            if (RECORDS.maxChapterUnlocked < (nextCh + 1)) {
+                                RECORDS.maxChapterUnlocked = nextCh + 1;
+                                saveGameData();
+                            }
+                            playSfx("breaker", 0, 0.95);
+                            triggerRumble(180, 1);
+                            startChapter(nextCh, true);
+                            return;
+                        } else {
+                            recordEscape((elapsedMs / 1000) | 0, GAME_SETTINGS.difficulty);
+                            endCursor = 0;
+                            startCinematic(CINEMATIC_EVAC, STATE_WIN);
+                            return;
+                        }
+                    } else if (activeInteractEnt) {
+                        const e = activeInteractEnt;
+                        if (e.kind === "locker") {
+                            player.hiding = true;
+                            player.crouched = false;
+                            player.hideReturnX = player.x;
+                            player.hideReturnY = player.y;
+                            player.x = toF64(e.x);
+                            player.y = toF64(e.y);
+                            if (e.faceAng !== undefined) player.ang = toF64(e.faceAng);
+                            playerVelX = toF64(0.0);
+                            playerVelY = toF64(0.0);
+                            playSfx("ui_select", 0, 0.75);
+                            showPopup("ESCONDIDO");
+                        } else if (e.kind === "npc") {
+                            playSfx("ui_select", 0, 0.85);
+                            e.spoken = true;
+                            showPopup(e.name || "SOBREVIVIENTE");
+                            showRadio(e.dialog || "VALDEZ: Sigue adelante, no te detengas.", 260);
+                        } else {
+                            e.taken = true;
+                            if (e.kind === "fuse") {
+                                fusesCollected++;
+                                playSfx("pickup", 0, 0.95);
+                                stalker.baseSpeed = fadd(stalker.baseSpeed, 0.0025);
+                                triggerScreenFlash(255, 200, 50, 56);
+                                triggerRumble(160, 1);
+                                showPopup(FUSE_POPUP_LABELS[fusesCollected] || "+1 FUSIBLE");
+                                showRadio(FUSE_RADIO_LABELS[fusesCollected] || "FUSIBLE RECOLECTADO.", 190);
+                            } else if (e.kind === "battery") {
+                                player.battery = toF64(Math.min(100.0, fadd(player.battery, 45.0)));
+                                playSfx("pickup", 0, 0.85);
+                                triggerScreenFlash(50, 220, 255, 48);
+                                triggerRumble(90, 1);
+                                showPopup("+45% BATERIA");
+                                showRadio("BATERIA +45% RECUPERADA.", 140);
+                            } else if (e.kind === "decoy") {
+                                playerDecoys = Math.min(3, playerDecoys + 1);
+                                playSfx("pickup", 0, 0.85);
+                                triggerScreenFlash(90, 215, 255, 42);
+                                triggerRumble(80, 1);
+                                showPopup("+1 SENUELO [L2]");
+                                showRadio("SENUELO RECOLECTADO: Pulsa [L2] para desviar al Acechador.", 170);
+                            } else if (e.kind === "breaker") {
+                                breakerActive = true;
+                                playSfx("breaker", 0, 1.0);
+                                for (let gy = 0; gy < worldGrid.length; gy++) {
+                                    for (let gx = 0; gx < worldGrid[gy].length; gx++) {
+                                        if (worldGrid[gy][gx] === 5) worldGrid[gy][gx] = 0;
+                                    }
+                                }
+                                triggerScreenFlash(60, 255, 110, 62);
+                                triggerRumble(210, 1);
+                                showPopup("REJAS DESBLOQUEADAS");
+                                showRadio("DISYUNTOR ACTIVADO: Se abrieron las rejas de seguridad!", 240);
+                            } else if (e.kind === "note") {
+                                playSfx("pickup", 0, 0.75);
+                                if (!collectedNotes[e.msgIdx]) {
+                                    collectedNotes[e.msgIdx] = true;
+                                    notesFoundCount++;
+                                }
+                                activeNoteIdx = e.msgIdx;
+                                triggerScreenFlash(220, 230, 255, 38);
+                                showRadio(LORE_MESSAGES[e.msgIdx] || "REGISTRO ENCONTRADO", 220);
+                                switchState(STATE_NOTE_VIEW);
+                                return;
+                            }
+                        }
+                    }
+                }
             }
 
-            const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty, dtMs);
+            const ai = updateStalkerAI(stalker, worldGrid, player, isSprinting, isMoving, frameTick, dtScale, GAME_SETTINGS.difficulty, dtMs, player.crouched, player.hiding);
             updateStalkerAnim(stalker, player.x, player.y, dtScale, ai.los, ai.blinded);
             const dangerRatio = toF64(Math.max(0.0, Math.min(1.0, (7.0 - toF64(ai.distP)) / 7.0)));
 
@@ -906,9 +1160,29 @@ Screen.display(() => {
             Draw.rect(sx, topY, hudW, 38, rgba(4, 6, 10, 124));
             Draw.rect(sx, topY + 37, hudW, 2, rgba(70, 95, 115, 120));
 
+            if (player.hiding) {
+                Draw.rect(0, 0, SCREEN_W, 92, rgba(0, 0, 0, 118));
+                Draw.rect(0, SCREEN_H - 92, SCREEN_W, 92, rgba(0, 0, 0, 118));
+                Draw.rect(0, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
+                Draw.rect(SCREEN_W - 68, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
+            }
+            if (activeInteractLabel.length > 0 && !mapOpen) {
+                const prW = Math.min(430, SCREEN_W - sx * 2 - 20);
+                const prX = (SCREEN_W - prW) >> 1;
+                const prY = SCREEN_H - sy - 82;
+                Draw.rect(prX, prY, prW, 30, rgba(8, 10, 16, 118));
+                Draw.rect(prX, prY, prW, 2, rgba(250, 215, 95, 124));
+                fnt.scale = Math.fround(0.70);
+                fnt.color = rgba(250, 225, 115, 128);
+                fnt.print(prX + 14, prY + 6, activeInteractLabel);
+            }
             fnt.scale = Math.fround(0.68);
             fnt.color = rgba(245, 245, 250, 128);
             fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
+            fnt.color = rgba(120, 225, 255, 128);
+            fnt.print(sx + 102, topY + 8, DECOY_HUD_LABELS[playerDecoys] || "SEN:0");
+            fnt.color = player.crouched ? rgba(95, 245, 135, 128) : rgba(175, 185, 200, 120);
+            fnt.print(sx + 178, topY + 8, player.crouched ? "SIGILO" : getActiveChapter().code);
             if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
                 const pendStep = HW3D_STREAM_STEPS[hwStreamStep];
                 Draw.rect(SCREEN_W - sx - 280, topY + 40, 276, 26, rgba(12, 16, 26, 118));
