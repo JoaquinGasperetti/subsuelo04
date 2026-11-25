@@ -8,36 +8,51 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 
 ```text
 .
-├── athena.elf                     # Runtime AthenaEnv V4 clean-api (3.6 MB) con render VU1 y fix de GS VRAM
+├── athena.elf                     # Runtime AthenaEnv V4 clean-api (3.75 MB) con render VU1 y fix de GS VRAM
 ├── athena.ini                     # Configuración de arranque de AthenaEnv (CRLF, boot_logo = false)
-├── main.js                        # Motor HK Engine 1 + juego completo en un solo bundle (sin imports ES6)
+├── main.js                        # Bundle monolítico generado para PS2 (sin imports ES6, 4.991 líneas)
 ├── title.cfg                      # Descriptor de arranque para la pestaña APPS de OPL
 ├── SYSTEM.CNF                     # Descriptor de arranque para DVD-R / ISO (CRLF)
 ├── ART/
 │   └── athena.elf_ICO.png         # Ícono 64x64 (PNG 8-bit) para la lista APPS de OPL
+├── src/                           # Código fuente modular de HK Engine 1 (compilado en main.js)
+│   ├── _preamble.js               # Cabecera inicial del bundle
+│   ├── config.js                  # Ajustes, utilidades Float64 MIPS, RGBA, estado 2D y telemetría
+│   ├── storage.js                 # Persistencia JSON en Memory Card (mc0:/SUBSUELO04/save.json)
+│   ├── audio.js                   # Módulos IOP (libsd/audsrv), Sound.Stream y Sound.Sfx
+│   ├── map.js                     # Grilla BASE_MAP (20x20), colisión AABB y notas de lore
+│   ├── ai.js                      # Máquina de estados de El Acechador y pathfinding BFS sin allocs
+│   ├── renderer.js                # Pipeline 3D VU1 + streaming progresivo + fallback 2.5D + PDA
+│   ├── menus.js                   # Pantallas de splash, título, opciones, pausa y expediente
+│   ├── cinematic.js               # Sistema declarativo de cinemáticas VHS + intro de 44 s
+│   └── main.js                    # Máquina de estados global y bucle principal Screen.display()
 ├── tools/
+│   ├── build_main.py              # Compila src/ → main.js (--check para verificar, --watch en vivo)
+│   ├── split_main.py              # Divide main.js en src/ preservando paridad byte a byte
+│   ├── modules.json               # Manifiesto con el orden exacto de concatenación de módulos
+│   ├── README_MODULAR.md          # Guía rápida del flujo modular src/ → main.js
 │   └── generate_map_walls.py      # Generador automático de mallas 3D de paredes desde BASE_MAP
 └── assets/
     ├── audio/
-    │   ├── ambient.wav            # Ambiente principal en bucle (24 kHz, 16-bit PCM estéreo)
-    │   ├── chase.wav              # Música de persecución en bucle (24 kHz, 16-bit PCM estéreo)
-    │   └── LEEME_AUDIO.txt        # Especificación de formatos de audio y SFX ADPCM (.adp)
+    │   ├── ambient.ogg            # Ambiente principal en bucle (OGG Vorbis estéreo, ~2.58 MB)
+    │   ├── chase.ogg              # Música de persecución en bucle (OGG Vorbis estéreo, ~1.33 MB)
+    │   └── LEEME_AUDIO.txt        # Especificación de formatos de audio y 9 SFX ADPCM (.adp)
     ├── fonts/
-    │   └── ui.ttf                 # Tipografía FreeType para menús, HUD y PDA
-    ├── models/                    # Mallas 3D en formato Wavefront OBJ (escenario, ítems y Acechador)
-    └── textures/                  # Texturas PNG (64x64 RGB para 3D + hk_logo.png 256x256 RGBA)
+    │   └── ui.ttf                 # Tipografía FreeType para menús, HUD y PDA (~668 KB)
+    ├── models/                    # 13 mallas 3D en formato Wavefront OBJ (escenario, ítems y Acechador)
+    └── textures/                  # 13 texturas PNG (64x64 RGB para 3D + hk_logo.png 256x256 RGBA)
 ```
 
 ## Cómo ejecutarlo
 
 ### PlayStation 2 real — USB con OPL APPS (recomendado)
 1. Formateá un pendrive en **FAT32**.
-2. Copiá el contenido del repositorio en `mass:/APPS/Subsuelo04/` (deben quedar `athena.elf`, `athena.ini`, `main.js`, `title.cfg` y la carpeta `assets/`).
+2. Copiá el contenido de ejecución en `mass:/APPS/Subsuelo04/` (solo hace falta `athena.elf`, `athena.ini`, `main.js`, `title.cfg` y la carpeta `assets/`; `src/` y `tools/` son solo de desarrollo).
 3. *(Opcional)* Copiá `ART/athena.elf_ICO.png` a `mass:/ART/` para ver el ícono en el menú de OPL.
 4. En **OPL**, desactivá **PADEMU** para evitar conflictos en el bus SIO2 y lanzá **Subsuelo 04** desde la pestaña **APPS**.
 
 ### PlayStation 2 real — USB con uLaunchELF / wLaunchELF
-1. Copiá la carpeta del repositorio en el pendrive (`mass:/Subsuelo04/`).
+1. Copiá los archivos de ejecución en el pendrive (`mass:/Subsuelo04/`).
 2. Abrí **uLaunchELF** (o una versión estable de wLaunchELF compatible con AthenaEnv) y ejecutá `athena.elf`.
 
 ### PlayStation 2 real — DVD-R (Modchip Matrix / Modbo)
@@ -59,28 +74,34 @@ Juego de **Survival Horror 3D en primera persona** para **PlayStation 2**, desar
 | **Círculo / Cuadrado** | Correr en partida (consume *stamina* y genera ruido) / volver en menús / saltar carga de audio |
 | **Triángulo** | Encender o apagar la linterna táctica |
 | **Select / L2** | Desplegar u ocultar el plano PDA |
-| **Start** | Pausar partida / confirmar |
+| **Start** | Pausar partida / confirmar / mantener 1.2 s para omitir cinemática |
 | **R2** | Alternar modo de diagnóstico en pantalla (0: apagado, 1: telemetría PS2, 2: telemetría + paredes magenta) |
 
 ---
 
 # Guía Técnica de Desarrollo — HK Engine 1
 
-**HK Engine 1** es el motor 3D/2.5D y framework de ejecución en JavaScript diseñado por **HK Entertainment** para crear videojuegos en **PlayStation 2 real** sobre **AthenaEnv V4 (`clean-api`)**. Esta sección reúne todas las especificaciones de arquitectura, renderizado, presupuesto poligonal, CPU, memoria y buenas prácticas necesarias para desarrollar o extender juegos con el motor.
+**HK Engine 1** es el motor 3D/2.5D y framework de ejecución en JavaScript diseñado por **HK Entertainment** para crear videojuegos en **PlayStation 2 real** sobre **AthenaEnv V4 (`clean-api`)**. Esta sección reúne todas las especificaciones de arquitectura, flujo modular, renderizado, presupuesto poligonal, CPU, memoria y buenas prácticas necesarias para desarrollar o extender juegos con el motor.
 
-## 1. Arquitectura general y runtime
+## 1. Arquitectura general, flujo modular y runtime
 
-- **Runtime base**: `athena.elf` compilado desde AthenaEnv `clean-api` (commit `ad1949e`, [CI build](https://github.com/DanielSant0s/AthenaEnv/actions/runs/44427724969)), con soporte de API VU1 moderna (`Render.init()`, `Render.begin()`, `RenderObject.render()`) y el [parche del allocator de GS VRAM](https://github.com/DanielSant0s/AthenaEnv/commit/6527a7375e4a10c254279bc938859a0a75af4214) que evita la superposición de rangos de memoria al alinear texturas.
-- **Formato de despliegue monolítico**: Todo el código del motor y el juego se empaqueta en un único archivo `main.js` (~205 KB, ~5.000 líneas) **sin `import` ES6**. Esto elimina fallos de resolución de rutas relativas y sensibilidad a mayúsculas/minúsculas entre `mass:/` (USB FAT32), `cdfs:/` (DVD ISO9660) y `host:/` (PCSX2).
-- **Organización lógica interna dentro de `main.js`**:
+- **Runtime base**: `athena.elf` compilado desde AthenaEnv `clean-api` (commit `ad1949e`, [CI build](https://www.google.com/search?q=https://github.com/DanielSant0s/AthenaEnv/actions/runs/44427724969)), con soporte de API VU1 moderna (`Render.init()`, `Render.begin()`, `RenderObject.render()`) y el [parche del allocator de GS VRAM](https://www.google.com/search?q=https://github.com/DanielSant0s/AthenaEnv/commit/6527a7375e4a10c254279bc938859a0a75af4214) que evita la superposición de rangos de memoria al alinear texturas.
+- **Desarrollo modular en `src/` → despliegue monolítico en `main.js`**: el código fuente se edita en 10 módulos separados dentro de `src/` y se ensambla en un único archivo `main.js` (~205 KB, 4.991 líneas) **sin `import` ES6** mediante `tools/build_main.py` y `tools/modules.json`. Esto combina comodidad de mantenimiento con compatibilidad total entre `mass:/` (USB FAT32), `cdfs:/` (DVD ISO9660) y `host:/` (PCSX2), sin fallos de rutas relativas ni sensibilidad a mayúsculas/minúsculas.
+- **Comandos de compilación (`tools/`)**:
+  - `python3 tools/build_main.py` — recompila `main.js` a partir de `src/`.
+  - `python3 tools/build_main.py --check` — valida paridad byte a byte entre `src/` y `main.js`.
+  - `python3 tools/build_main.py --watch` — recompila `main.js` automáticamente al guardar cambios en `src/`.
+- **Organización de módulos en `src/`**:
+  - `src/_preamble.js`: cabecera inicial del bundle.
   - `src/config.js`: ajustes dinámicos (`GAME_SETTINGS`), utilidades Float64 seguras para MIPS, empaquetado RGBA, estado 2D (`restore2DRenderState`) y telemetría de consola (`consoleStats`).
   - `src/storage.js`: persistencia JSON en Memory Card (`mc0:/SUBSUELO04/save.json`).
   - `src/audio.js`: carga de módulos IOP (`libsd`, `audsrv`), `Sound.Stream` y `Sound.Sfx`.
   - `src/map.js`: grilla lógica `BASE_MAP` (`20×20`), colisión AABB por ejes con sub-stepping (`movePlayerAxis`) y notas de lore.
   - `src/ai.js`: máquina de estados del enemigo (`AI_PATROL`, `AI_INVESTIGATE`, `AI_CHASE_INTRO`, `AI_HUNT`) y pathfinding BFS sin asignaciones.
   - `src/renderer.js`: pipeline 3D por hardware (VU1 + GS), streaming progresivo en 13 pasos (`HW3D_STREAM_STEPS`), fallback 2.5D por software, viewmodel y PDA.
+  - `src/menus.js`: pantallas de splash, carga, título, opciones, pausa y expediente.
   - `src/cinematic.js`: sistema de cinemáticas declarativo sin asignaciones por cuadro (keyframes de cámara, fundidos, subtítulos máquina de escribir, efectos VHS, entidades y cues de audio) + intro *found footage* de 44 s (`CINEMATIC_INTRO`).
-  - `src/menus.js` y `main.js`: máquina de estados global (`STATE_SPLASH` → `STATE_LOADING` → `STATE_TITLE` → `STATE_MAP_LOADING` → `STATE_CINEMATIC` → `STATE_PLAY` / `STATE_PAUSE` / `STATE_OPTIONS` / etc.) y bucle `Screen.display()`.
+  - `src/main.js`: máquina de estados global (`STATE_SPLASH` → `STATE_LOADING` → `STATE_TITLE` → `STATE_MAP_LOADING` → `STATE_CINEMATIC` → `STATE_PLAY` / `STATE_PAUSE` / `STATE_OPTIONS` / etc.) y bucle `Screen.display()`.
 - **Configuración de arranque (`athena.ini`)**: debe mantenerse con saltos de línea **CRLF** (`boot_logo = false`, `dark_mode = true`, `default_script = "main.js"`). El logo nativo de AthenaEnv se desactiva para mostrar el splash propio de **HK Entertainment** (`STATE_SPLASH`), cuya textura se libera de VRAM antes de iniciar la partida.
 
 ## 2. Pipeline de renderizado
@@ -124,11 +145,11 @@ En cada cuadro de `renderHardware3DWorld()` el motor ejecuta estrictamente esta 
 Si la consola o el usuario selecciona `2.5D MEDIA` (96 rayos) o `2.5D RAPIDA` (64 rayos), el motor usa un raycaster DDA sin asignaciones por cuadro con tablas precalculadas en `Float64Array` (`QUALITY_TABLES`), caché de anchos de columna en `Int16Array` (`colStartX`, `colWidth`), agrupamiento de columnas contiguas (*Span Batching* en `flushWallSpan`) y sombreado Gouraud por primitivas `Draw.quad` / `Draw.triangle`.
 
 ### 2.5 Animación procedural del Acechador (sin assets nuevos)
-El Acechador es un único `RenderObject` rígido (`stalker.obj`, 311 tris), así que su "animación" se calcula por código y se aplica solo a posición y rotación al llamar a `drawHwObject(...)`. **No agrega draw calls, triángulos ni memoria de assets.**
+El Acechador es un único `RenderObject` rígido (`stalker.obj`, 311 tris), así que su animación se calcula por código y se aplica solo a posición y rotación al llamar a `drawHwObject(...)`. **No agrega draw calls, triángulos ni memoria de assets.**
 
 - **Funciones**: `resetStalkerAnim(inst, x, y)` (se llama al iniciar la partida y la cinemática) y `updateStalkerAnim(inst, lookX, lookY, dtScale, hasLos, isBlinded)` (una vez por cuadro, tanto en gameplay como en `STATE_CINEMATIC` con `cinStalker`). Los resultados quedan en `animOutY`, `animOutRx`, `animOutRy` y `animOutRz`.
-- **Qué hace**: balanceo vertical y inclinaciones con frecuencia proporcional a la velocidad real (calculada del desplazamiento por cuadro); patrulla lenta y pesada, investigación cautelosa, persecución inclinada hacia adelante y más agresiva, y espasmos cuando la linterna lo frena (`isBlinded`). Gira suavemente hacia su dirección de movimiento (arco más corto, estilo `cinLerpAngle`) y solo se orienta al jugador cuando lo persigue o lo tiene a la vista.
-- **Reglas de rendimiento**: tabla de senos precomputada (`Float64Array`, 256 entradas), cero asignaciones por cuadro y avance con `dtScale` (paridad NTSC/PAL).
+- **Qué hace**: balanceo vertical e inclinaciones con frecuencia proporcional a la velocidad real (calculada del desplazamiento por cuadro); patrulla lenta y pesada, investigación cautelosa, persecución inclinada hacia adelante y más agresiva, y espasmos cuando la linterna lo frena (`isBlinded`). Gira suavemente hacia su dirección de movimiento (arco más corto, estilo `cinLerpAngle`) y solo se orienta al jugador cuando lo persigue o lo tiene a la vista.
+- **Reglas de rendimiento**: tabla de senos precomputada (`Float64Array`, 256 entradas), cero asignaciones por cuadro, avance con `dtScale` (paridad NTSC/PAL) y opción activable desde Opciones (`ANIMACION 3D`, guardada en Memory Card).
 - **Ajuste fino**: las amplitudes están en `updateStalkerAnim` (`bobAmp`, `rollAmp`, `pitchBase`, `freqScale` por estado). Con valores simulados el rebote máximo ronda 5 cm y la inclinación máxima ~11° al perseguir.
 
 ## 3. Presupuesto poligonal y pipeline de assets 3D
@@ -142,18 +163,18 @@ El Acechador es un único `RenderObject` rígido (`stalker.obj`, 311 tris), así
 
 | Archivo OBJ | Vértices | Triángulos | Peso | `accurate_clipping` | Rol en escena |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| `map_floor.obj` | 260 | 130 | 16.3 KB | `false` | Piso estático del nivel |
-| `map_ceiling.obj` | 260 | 130 | 16.3 KB | `false` | Techo estático del nivel |
-| `map_walls_concrete.obj` | 568 | 284 | 34.8 KB | `true` | Paredes de hormigón (tipo `1`) |
-| `map_walls_rust.obj` | 224 | 112 | 13.5 KB | `true` | Pilares/estructuras oxidadas (tipo `2`) |
-| `map_walls_ritual.obj` | 68 | 34 | 4.0 KB | `true` | Paredes de zona ritual (tipo `3`) |
+| `map_floor.obj` | 260 | 130 | 17.4 KB | `false` | Piso estático del nivel |
+| `map_ceiling.obj` | 260 | 130 | 17.4 KB | `false` | Techo estático del nivel |
+| `map_walls_concrete.obj` | 568 | 284 | 37.2 KB | `true` | Paredes de hormigón (tipo `1`) |
+| `map_walls_rust.obj` | 224 | 112 | 14.4 KB | `true` | Pilares/estructuras oxidadas (tipo `2`) |
+| `map_walls_ritual.obj` | 68 | 34 | 4.3 KB | `true` | Paredes de zona ritual (tipo `3`) |
 | `map_exit.obj` | 8 | 4 | 0.5 KB | `true` | Compuerta blindada Norte (tipo `4`) |
-| `map_gates.obj` | 64 | 32 | 3.9 KB | `true` | Rejas dinámicas (tipo `5`, se ocultan al activar disyuntor) |
-| `stalker.obj` | 933 | 311 | 72.1 KB | `false` | Enemigo 3D (proxy fallback: `stalker_placeholder.obj`, 72 tris) |
-| `fuse.obj` | 24 | 12 | 1.4 KB | `false` | Prop fusible (hasta 4 instancias = 48 tris máx.) |
-| `battery.obj` | 24 | 12 | 1.4 KB | `false` | Prop batería (hasta 3 instancias = 36 tris máx.) |
-| `breaker.obj` | 24 | 12 | 1.4 KB | `false` | Prop disyuntor central (1 instancia = 12 tris) |
-| `note.obj` | 24 | 12 | 1.4 KB | `false` | Prop nota de lore (hasta 4 instancias = 48 tris máx.) |
+| `map_gates.obj` | 64 | 32 | 4.1 KB | `true` | Rejas dinámicas (tipo `5`, se ocultan al activar disyuntor) |
+| `stalker.obj` | 933 | 311 | 77.0 KB | `false` | Enemigo 3D (proxy fallback: `stalker_placeholder.obj`, 72 tris, 9.4 KB) |
+| `fuse.obj` | 24 | 12 | 1.5 KB | `false` | Prop fusible (hasta 4 instancias = 48 tris máx.) |
+| `battery.obj` | 24 | 12 | 1.5 KB | `false` | Prop batería (hasta 3 instancias = 36 tris máx.) |
+| `breaker.obj` | 24 | 12 | 1.5 KB | `false` | Prop disyuntor central (1 instancia = 12 tris) |
+| `note.obj` | 24 | 12 | 1.5 KB | `false` | Prop nota de lore (hasta 4 instancias = 48 tris máx.) |
 
 - **Total de escenario completo (con rejas)**: **726 triángulos** en 7 draw calls (`694` triángulos sin rejas).
 - **Total máximo simultáneo en escena** (escenario + enemigo + 12 ítems): **1.181 triángulos** y hasta **20 draw calls** en el peor caso (en la práctica suele ser menor por distance culling).
@@ -169,13 +190,14 @@ El Acechador es un único `RenderObject` rígido (`stalker.obj`, 311 tris), así
 | Texturas 3D | **64×64 RGB PNG** | **128×128** solo para superficies heroicas; siempre pasar `tex.optimize()` |
 
 ### 3.4 Generación automática de paredes (`tools/generate_map_walls.py`)
-Para editar el diseño de un nivel, se modifica `BASE_MAP` en `main.js` y se ejecuta:
+Para editar el diseño de un nivel, se modifica `BASE_MAP` en `src/map.js`, se recompila el bundle y se regeneran los OBJ de paredes:
 
 ```bash
+python3 tools/build_main.py
 python3 tools/generate_map_walls.py
 ```
 
-El script analiza la grilla `BASE_MAP`, emite **únicamente caras expuestas** que lindan con celdas caminables (`0`), fusiona tramos colineales contiguos en un solo quad (reduciendo drásticamente los triángulos), ajusta las UVs al largo del tramo y elimina caras internas coplanares entre paredes adyacentes que provocan parpadeo (*Z-fighting*) en el GS de 16 bits.
+El script analiza la grilla `BASE_MAP` en `main.js`, emite **únicamente caras expuestas** que lindan con celdas caminables (`0`), fusiona tramos colineales contiguos en un solo quad (reduciendo drásticamente los triángulos), ajusta las UVs al largo del tramo y elimina caras internas coplanares entre paredes adyacentes que provocan parpadeo (*Z-fighting*) en el GS de 16 bits.
 
 ## 4. CPU (Emotion Engine 294 MHz) y reglas de QuickJS en MIPS
 
@@ -204,7 +226,7 @@ La PlayStation 2 cuenta con un procesador principal **Emotion Engine (MIPS R5900
 
 | Memoria | Capacidad física | Uso en HK Engine 1 |
 | :--- | :---: | :--- |
-| **EE RAM** (RAM principal) | **32 MB** | Runtime `athena.elf` (~3.6 MB), heap de QuickJS, `main.js`, geometría OBJ en RAM (`RenderData`), buffers de streaming de audio y fuente FreeType (`ui.ttf`, 652 KB). |
+| **EE RAM** (RAM principal) | **32 MB** | Runtime `athena.elf` (~3.75 MB), heap de QuickJS, `main.js`, geometría OBJ en RAM (`RenderData`), buffers de streaming OGG y fuente FreeType (`ui.ttf`, ~668 KB). |
 | **GS VRAM** (eDRAM de video) | **4 MB (4.096 KB)** | Doble framebuffer (front + back) + Z-Buffer `Z16S` (~2.2 a 2.8 MB según NTSC/PAL), atlas/caché de glifos FreeType y texturas 3D activas. |
 | **IOP RAM** (I/O y audio) | **2 MB** | Drivers de USB (`mass:`), Memory Card (`mc0:`), DualShock 2 (`sio2`), módulos `libsd`/`audsrv` y muestras ADPCM SPU2. |
 
@@ -220,8 +242,8 @@ La PlayStation 2 cuenta con un procesador principal **Emotion Engine (MIPS R5900
 
 ### 6.1 Audio (IOP + SPU2)
 - **Inicialización diferida**: los módulos `libsd` y `audsrv` se cargan vía `IOP.getModule` / `IOP.loadModule` durante `STATE_LOADING` (o tras `frameTick >= 15` si se omitió la carga). El usuario puede presionar **Círculo** en la pantalla de carga para iniciar sin audio si hubiera algún problema en USB.
-- **Streams de música (`Sound.Stream`)**: el juego busca primero `.wav` y luego `.ogg` (`assets/audio/ambient.wav` / `.ogg` y `chase.wav` / `.ogg`). Los archivos incluidos están en **24.000 Hz, 16-bit PCM estéreo** para streaming fluido sin sobrecargar el EE.
-- **Efectos cortos (`Sound.Sfx`)**: la infraestructura soporta 9 efectos en formato **PS2 SPU2 ADPCM (`.adp`)** con volumen y paneo 3D (`-100` a `+100`), omitidos automáticamente sin errores si no existen en disco para no desperdiciar lecturas en USB 1.1.
+- **Streams de música (`Sound.Stream`)**: el motor soporta tanto `.wav` como `.ogg` (`assets/audio/ambient.ogg` / `.wav` y `chase.ogg` / `.wav`). Actualmente el repositorio incluye las pistas en **OGG Vorbis estéreo** (`ambient.ogg` de ~2.58 MB y `chase.ogg` de ~1.33 MB), reduciendo el peso de audio de ~33 MB en WAV a ~3.9 MB totales.
+- **Efectos cortos (`Sound.Sfx`)**: la infraestructura define 9 efectos en formato **PS2 SPU2 ADPCM (`.adp`)** con volumen y paneo 3D (`-100` a `+100`) en `SFX_PATHS` (`step`, `flashlight`, `pickup`, `breaker`, `gate_locked`, `heartbeat`, `jumpscare`, `ui_move`, `ui_select`). Todavía no hay archivos `.adp` incluidos en `assets/audio/`; el motor verifica su existencia con `fileExistsSafe()` y los omite silenciosamente hasta que se agreguen.
 
 ### 6.2 DualShock 2 y bus SIO2
 - **Zona muerta analógica**: `STICK_DEADZONE = 0.22` (calibrada para sticks DualShock 2 originales con desgaste).
@@ -244,8 +266,8 @@ Presionando **R2** durante la partida (o activando *FPS / Diagnóstico* en Opcio
 
 ## 8. Checklist rápido para desarrollar con HK Engine 1
 
-1. **Mantener un solo `main.js`** sin `import` ES6 ni rutas absolutas dependientes de PC.
-2. **Al modificar el mapa (`BASE_MAP`)**, regenerar siempre los OBJ de paredes ejecutando `python3 tools/generate_map_walls.py`.
+1. **Editar siempre los módulos en `src/`** y recompilar el bundle PS2 con `python3 tools/build_main.py` (verificando con `--check` antes de commitear). No usar `import` ES6 ni rutas absolutas dependientes de PC.
+2. **Al modificar el mapa (`BASE_MAP` en `src/map.js`)**, recompilar `main.js` y regenerar los OBJ de paredes ejecutando `python3 tools/generate_map_walls.py`.
 3. **Exportar modelos 3D** en `.obj` triangulado con texturas `64×64` PNG (RGB), registrando cada asset en `HW3D_STREAM_STEPS` y reteniendo cada `Image` en `hwKeptTextures`.
 4. **Activar `accurate_clipping = true`** únicamente en mallas grandes atravesables de cerca (paredes, puertas, rejas); dejar `false` en piso, techo, props y personajes.
 5. **Respetar el orden de cámara** (`Camera.target` antes de `Camera.position`) y alternar `DEPTH_TEST_ENABLE` (`true` + `DEPTH_GEQUAL` en 3D, `false` en 2D/HUD).
@@ -277,13 +299,15 @@ El `athena.elf` incluido (3.753.784 bytes) expone `Render.init/begin/setView`, `
 
 ## Próximos pasos
 
-- [x] Sistema de cinemáticas declarativo (`src/cinematic.js` embebido en `main.js`) con cámara interpolada, efectos VHS, subtítulos máquina de escribir, aparición de El Acechador y salto manteniendo `START`.
+- [x] Sistema de cinemáticas declarativo (`src/cinematic.js`) con cámara interpolada, efectos VHS, subtítulos máquina de escribir, aparición de El Acechador y salto manteniendo `START`.
 - [x] Cinemática introductoria *found footage* de 44 segundos al iniciar Nueva Partida (`STATE_MAP_LOADING` → `STATE_CINEMATIC` → `STATE_PLAY`).
 - [x] Animación procedural del Acechador (balanceo, inclinación por estado de IA, espasmos con linterna y orientación hacia su movimiento), también en la cinemática.
 - [x] Compatibilidad con objetos nativos sin prototipo (`hkFixProto`) y degradación segura del 3D a 2.5D.
-- [ ] Grabar y convertir a PS2 SPU2 ADPCM (`.adp`) los efectos cortos de cinemática y gameplay (`vhs_static.adp`, `stalker_growl.adp`, `gate_locked.adp`, `flashlight.adp`, `heartbeat.adp`) y habilitar su precarga opcional.
+- [x] Migración de pistas musicales a OGG Vorbis (`ambient.ogg` y `chase.ogg`).
+- [x] Flujo modular de desarrollo (`src/` + `tools/build_main.py` / `tools/split_main.py`) con compilación verificada byte a byte hacia `main.js`.
+- [ ] Grabar y convertir a PS2 SPU2 ADPCM (`.adp`) los 9 efectos cortos declarados en `SFX_PATHS` (`step`, `flashlight`, `pickup`, `breaker`, `gate_locked`, `heartbeat`, `jumpscare`, `ui_move`, `ui_select`).
 - [ ] Agregar cinemática de evacuación (apertura de compuerta Norte al reunir los 4 fusibles) reutilizando `startCinematic(...)`.
-- [ ] Validar en hardware PS2 real (OPL USB 1.1 y DVD-R) los 44 segundos completos de la intro en modo 3D VU1 y 2.5D con telemetría `R2` (FPS, EE RAM y GS VRAM).
+- [ ] Validar en hardware PS2 real (OPL USB 1.1 y DVD-R) los 44 segundos completos de la intro y el streaming OGG + ADPCM simultáneo con telemetría `R2` (FPS, EE RAM y GS VRAM).
 - [ ] Añadir opción en Menú de Opciones para omitir automáticamente la intro en partidas siguientes o verla desde Expediente.
 
 ---
