@@ -1,0 +1,47 @@
+{
+  "output": "main.js",
+  "newline": "\n",
+  "source_sha256": "2ac40fd2aeeef28d3862857729ba6453933bee79cc92cd6e74117d26c2f26515",
+  "modules": [
+    {
+      "path": "src/_preamble.js",
+      "marker": null
+    },
+    {
+      "path": "src/config.js",
+      "marker": "// --- MODULE: src/config.js ---\n"
+    },
+    {
+      "path": "src/storage.js",
+      "marker": "// --- MODULE: src/storage.js ---\n"
+    },
+    {
+      "path": "src/audio.js",
+      "marker": "// --- MODULE: src/audio.js ---\n"
+    },
+    {
+      "path": "src/map.js",
+      "marker": "// --- MODULE: src/map.js ---\n"
+    },
+    {
+      "path": "src/ai.js",
+      "marker": "// --- MODULE: src/ai.js ---\n"
+    },
+    {
+      "path": "src/renderer.js",
+      "marker": "// --- MODULE: src/renderer.js ---\n"
+    },
+    {
+      "path": "src/menus.js",
+      "marker": "// --- MODULE: src/menus.js ---\n"
+    },
+    {
+      "path": "src/cinematic.js",
+      "marker": "// --- MODULE: src/cinematic.js ---\n"
+    },
+    {
+      "path": "src/main.js",
+      "marker": "// --- MODULE: main.js ---\n"
+    }
+  ]
+}
