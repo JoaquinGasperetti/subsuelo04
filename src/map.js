@@ -89,6 +89,13 @@ const CHAPTERS = [
         objectiveExit: "SALIDA NORTE ABIERTA! [X EN COMPUERTA]",
         grid: BASE_MAP,
         meshPrefix: "map_",
+        atmosphere: {
+            clearR: 4, clearG: 6, clearB: 10,
+            ambOff: [0.09, 0.11, 0.14], ambOn: [0.20, 0.22, 0.26],
+            diffOn: [1.02, 0.98, 0.92], diffOff: [0.22, 0.24, 0.28],
+            fillAmb: [0.12, 0.15, 0.19], fillDiff: [0.24, 0.28, 0.36],
+            dustR: 185, dustG: 205, dustB: 225
+        },
         playerSpawn: { x: 10.0, y: 1.8, ang: 1.5708 },
         stalkerSpawn: { x: 10.5, y: 16.5, speedNormal: 0.024, speedNightmare: 0.029 },
         waypoints: [
@@ -128,6 +135,13 @@ const CHAPTERS = [
         objectiveExit: "ESCLUSA NORTE ABIERTA! [X EN COMPUERTA]",
         grid: CH2_MAP,
         meshPrefix: "ch2_",
+        atmosphere: {
+            clearR: 10, clearG: 6, clearB: 4,
+            ambOff: [0.12, 0.08, 0.05], ambOn: [0.24, 0.18, 0.13],
+            diffOn: [1.08, 0.88, 0.68], diffOff: [0.28, 0.20, 0.13],
+            fillAmb: [0.18, 0.12, 0.08], fillDiff: [0.36, 0.24, 0.15],
+            dustR: 235, dustG: 195, dustB: 145
+        },
         playerSpawn: { x: 10.0, y: 18.45, ang: -1.5708 },
         stalkerSpawn: { x: 10.0, y: 3.5, speedNormal: 0.026, speedNightmare: 0.031 },
         waypoints: [
@@ -168,6 +182,13 @@ const CHAPTERS = [
         objectiveExit: "ASCENSOR NORTE LISTO! [X PARA ESCAPAR]",
         grid: CH3_MAP,
         meshPrefix: "ch3_",
+        atmosphere: {
+            clearR: 11, clearG: 3, clearB: 4,
+            ambOff: [0.13, 0.04, 0.05], ambOn: [0.25, 0.12, 0.13],
+            diffOn: [1.06, 0.80, 0.78], diffOff: [0.28, 0.10, 0.11],
+            fillAmb: [0.20, 0.06, 0.07], fillDiff: [0.40, 0.12, 0.14],
+            dustR: 240, dustG: 115, dustB: 115
+        },
         playerSpawn: { x: 10.0, y: 18.45, ang: -1.5708 },
         stalkerSpawn: { x: 10.0, y: 5.5, speedNormal: 0.028, speedNightmare: 0.033 },
         waypoints: [

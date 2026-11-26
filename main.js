@@ -593,6 +593,13 @@ const CHAPTERS = [
         objectiveExit: "SALIDA NORTE ABIERTA! [X EN COMPUERTA]",
         grid: BASE_MAP,
         meshPrefix: "map_",
+        atmosphere: {
+            clearR: 4, clearG: 6, clearB: 10,
+            ambOff: [0.09, 0.11, 0.14], ambOn: [0.20, 0.22, 0.26],
+            diffOn: [1.02, 0.98, 0.92], diffOff: [0.22, 0.24, 0.28],
+            fillAmb: [0.12, 0.15, 0.19], fillDiff: [0.24, 0.28, 0.36],
+            dustR: 185, dustG: 205, dustB: 225
+        },
         playerSpawn: { x: 10.0, y: 1.8, ang: 1.5708 },
         stalkerSpawn: { x: 10.5, y: 16.5, speedNormal: 0.024, speedNightmare: 0.029 },
         waypoints: [
@@ -632,6 +639,13 @@ const CHAPTERS = [
         objectiveExit: "ESCLUSA NORTE ABIERTA! [X EN COMPUERTA]",
         grid: CH2_MAP,
         meshPrefix: "ch2_",
+        atmosphere: {
+            clearR: 10, clearG: 6, clearB: 4,
+            ambOff: [0.12, 0.08, 0.05], ambOn: [0.24, 0.18, 0.13],
+            diffOn: [1.08, 0.88, 0.68], diffOff: [0.28, 0.20, 0.13],
+            fillAmb: [0.18, 0.12, 0.08], fillDiff: [0.36, 0.24, 0.15],
+            dustR: 235, dustG: 195, dustB: 145
+        },
         playerSpawn: { x: 10.0, y: 18.45, ang: -1.5708 },
         stalkerSpawn: { x: 10.0, y: 3.5, speedNormal: 0.026, speedNightmare: 0.031 },
         waypoints: [
@@ -672,6 +686,13 @@ const CHAPTERS = [
         objectiveExit: "ASCENSOR NORTE LISTO! [X PARA ESCAPAR]",
         grid: CH3_MAP,
         meshPrefix: "ch3_",
+        atmosphere: {
+            clearR: 11, clearG: 3, clearB: 4,
+            ambOff: [0.13, 0.04, 0.05], ambOn: [0.25, 0.12, 0.13],
+            diffOn: [1.06, 0.80, 0.78], diffOff: [0.28, 0.10, 0.11],
+            fillAmb: [0.20, 0.06, 0.07], fillDiff: [0.40, 0.12, 0.14],
+            dustR: 240, dustG: 115, dustB: 115
+        },
         playerSpawn: { x: 10.0, y: 18.45, ang: -1.5708 },
         stalkerSpawn: { x: 10.0, y: 5.5, speedNormal: 0.028, speedNightmare: 0.033 },
         waypoints: [
@@ -1477,12 +1498,26 @@ let hwLoadErrorMsg = "";
 let hwDrawFailed = false;
 let mapLoadPhase = 0;
 let hwLoadedChapterIdx = -1;
+let hwAppliedAtmoChapter = -1;
 const hwTexCache = {};
+
+// Pool preasignado de 14 partículas atmosféricas (polvo/vapor/brasas) sin allocs
+const HW_DUST_COUNT = 14;
+const hwDustX = new Float64Array(HW_DUST_COUNT);
+const hwDustY = new Float64Array(HW_DUST_COUNT);
+const hwDustSpd = new Float64Array(HW_DUST_COUNT);
+const hwDustSize = new Uint8Array(HW_DUST_COUNT);
+for (let i = 0; i < HW_DUST_COUNT; i++) {
+    hwDustX[i] = ((i * 97 + 31) % 640);
+    hwDustY[i] = ((i * 61 + 47) % 448);
+    hwDustSpd[i] = 0.25 + ((i % 4) * 0.14);
+    hwDustSize[i] = (i % 3 === 0) ? 3 : 2;
+}
 
 const HW3D_STREAM_STEPS = [
     { kind: "init",    label: "MOTOR 3D (VU1 / CAMARA)" },
-    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         clip: false, label: "MAPA: PISO" },
-    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       clip: false, label: "MAPA: TECHO" },
+    { kind: "static",  obj: "assets/models/map_floor.obj",          tex: "assets/textures/floor.png",         clip: true,  label: "MAPA: PISO" },
+    { kind: "static",  obj: "assets/models/map_ceiling.obj",        tex: "assets/textures/ceiling.png",       clip: true,  label: "MAPA: TECHO" },
     { kind: "static",  obj: "assets/models/map_walls_concrete.obj", tex: "assets/textures/wall_concrete.png", clip: true, label: "MAPA: PAREDES" },
     { kind: "static",  obj: "assets/models/map_walls_rust.obj",     tex: "assets/textures/wall_rust.png",     clip: true, label: "MAPA: ESTRUCTURAS" },
     { kind: "static",  obj: "assets/models/map_walls_ritual.obj",   tex: "assets/textures/wall_ritual.png",   clip: true, label: "MAPA: ZONA RITUAL" },
@@ -2004,14 +2039,40 @@ function renderHardware3DWorld(
         Camera.position(camX, camY, camZ);
         Camera.update();
 
-        // Actualizar luz principal solo cuando cambia la linterna (cero spam a C por cuadro)
-        const flashStateBit = flashActive ? 1 : 0;
-        if (hwLightMain >= 0 && hwLightMain <= 3 && flashStateBit !== hwLastFlashState) {
+        // Perfil de atmósfera por capítulo + linterna 3D direccional viva + luz de alarma
+        const chAtmo = (typeof getActiveChapter === "function" && getActiveChapter().atmosphere)
+            ? getActiveChapter().atmosphere
+            : null;
+        if (chAtmo && hwAppliedAtmoChapter !== activeChapterIdx) {
+            hwAppliedAtmoChapter = activeChapterIdx;
+            hwLastFlashState = -1;
+            try { Screen.clearColor(rgba(chAtmo.clearR, chAtmo.clearG, chAtmo.clearB, 128)); } catch (_) {}
+        }
+
+        const flashStateBit = (flashActive ? 1 : 0) | ((lowFlicker < 0.9) ? 2 : 0);
+        const needLightUpdate = (flashStateBit !== hwLastFlashState) || ((frameTick & 1) === 0);
+        if (hwLightMain >= 0 && hwLightMain <= 3 && needLightUpdate) {
             hwLastFlashState = flashStateBit;
-            const lp = flashActive ? 1.05 : 0.25;
-            Lights.set(hwLightMain, Lights.DIRECTION, 0.0, -0.35, -1.0);
-            Lights.set(hwLightMain, Lights.AMBIENT, flashActive ? 0.24 : 0.12, flashActive ? 0.24 : 0.13, flashActive ? 0.26 : 0.16);
-            Lights.set(hwLightMain, Lights.DIFFUSE, lp, lp * 0.96, lp * 0.90);
+            const pitchDir = clampF64(((targetY - camY) * 0.22) - 0.18, -0.85, 0.55);
+            Lights.set(hwLightMain, Lights.DIRECTION, -dirX, pitchDir, -dirZ);
+            if (chAtmo) {
+                const amb = flashActive ? chAtmo.ambOn : chAtmo.ambOff;
+                const dif = flashActive ? chAtmo.diffOn : chAtmo.diffOff;
+                const mul = flashActive ? clampF64(0.35 + effFlash * 0.65, 0.25, 1.05) : 1.0;
+                Lights.set(hwLightMain, Lights.AMBIENT, amb[0] * mul, amb[1] * mul, amb[2] * mul);
+                Lights.set(hwLightMain, Lights.DIFFUSE, dif[0] * mul, dif[1] * mul, dif[2] * mul);
+            } else {
+                const lp = flashActive ? (1.05 * effFlash) : 0.25;
+                Lights.set(hwLightMain, Lights.AMBIENT, flashActive ? 0.22 : 0.11, flashActive ? 0.22 : 0.12, flashActive ? 0.25 : 0.15);
+                Lights.set(hwLightMain, Lights.DIFFUSE, lp, lp * 0.96, lp * 0.90);
+            }
+        }
+        if (hwLightFill >= 0 && hwLightFill <= 3 && ((frameTick & 3) === 0)) {
+            const alarmPulse = (dRatio - 0.25) > 0 ? (dRatio * (0.5 + 0.5 * Math.sin(frameTick * 0.22))) : 0.0;
+            const fAmb = chAtmo ? chAtmo.fillAmb : [0.14, 0.16, 0.20];
+            const fDif = chAtmo ? chAtmo.fillDiff : [0.26, 0.28, 0.34];
+            Lights.set(hwLightFill, Lights.AMBIENT, fAmb[0] + alarmPulse * 0.32, fAmb[1] * (1.0 - alarmPulse * 0.45), fAmb[2] * (1.0 - alarmPulse * 0.45));
+            Lights.set(hwLightFill, Lights.DIFFUSE, fDif[0] + alarmPulse * 0.52, fDif[1] * (1.0 - alarmPulse * 0.55), fDif[2] * (1.0 - alarmPulse * 0.55));
         }
 
         // 1. Escenario estatico 3D
@@ -2038,7 +2099,9 @@ function renderHardware3DWorld(
             if (!prop) continue;
             const dxC = toF64(e.x) - px;
             const dyC = toF64(e.y) - py;
-            if ((dxC * dxC + dyC * dyC) > 81.0) continue;
+            const dSq = dxC * dxC + dyC * dyC;
+            if (dSq > 81.0) continue;
+            if (dSq > 4.0 && ((dxC * dirX + dyC * dirZ) < -0.35)) continue;
             const pose = hwEntityTransforms[i];
             if (!pose) continue;
             const isStatic = (e.kind === "breaker" || e.kind === "note" || e.kind === "locker" || e.kind === "npc");
@@ -2053,7 +2116,8 @@ function renderHardware3DWorld(
         if (hwStalkerObj) {
             const sdxC = toF64(stalker.x) - px;
             const sdyC = toF64(stalker.y) - py;
-            if ((sdxC * sdxC + sdyC * sdyC) <= 225.0) {
+            const sdSq = sdxC * sdxC + sdyC * sdyC;
+            if (sdSq <= 225.0 && (sdSq <= 4.5 || (sdxC * dirX + sdyC * dirZ) >= -0.45)) {
                 const sx = toF64(stalker.x) * WORLD_CELL_SIZE;
                 const sz = toF64(stalker.y) * WORLD_CELL_SIZE;
                 drawHwObject(
@@ -2075,6 +2139,26 @@ function renderHardware3DWorld(
         const enableBob = GAME_SETTINGS.bob;
         const vmBobOffset = enableBob ? ((Math.sin(pbob) * 3.0) | 0) : 0;
         const vmSwayOffset = enableBob ? ((Math.cos(pbob * 0.5) * 2.0) | 0) : 0;
+        if (GAME_SETTINGS.particles && GAME_SETTINGS.overlays && effFlash > 0.15) {
+            const pAtmo = (typeof getActiveChapter === "function" && getActiveChapter().atmosphere)
+                ? getActiveChapter().atmosphere : null;
+            const dr = pAtmo ? pAtmo.dustR : 185;
+            const dg = pAtmo ? pAtmo.dustG : 205;
+            const db = pAtmo ? pAtmo.dustB : 225;
+            const dAlpha = ((effFlash * 38.0) | 0);
+            const dustCol = rgba(dr, dg, db, dAlpha);
+            const pDriftX = (typeof playerTurnVel === "number") ? (-playerTurnVel * 48.0) : 0.0;
+            for (let di = 0; di < HW_DUST_COUNT; di++) {
+                let nx = hwDustX[di] + pDriftX + ((di & 1) ? 0.16 : -0.12);
+                let ny = hwDustY[di] - hwDustSpd[di];
+                if (nx < 0) nx += screenW; else if (nx >= screenW) nx -= screenW;
+                if (ny < 44) ny = screenH - 44;
+                hwDustX[di] = nx;
+                hwDustY[di] = ny;
+                const sz = hwDustSize[di];
+                Draw.rect(nx | 0, ny | 0, sz, sz, dustCol);
+            }
+        }
         if (GAME_SETTINGS.viewmodel) {
             renderFlashlightViewmodel(screenW, screenH, effFlash, pbat, vmBobOffset, vmSwayOffset, mAnim, frameTick);
         }
@@ -3268,7 +3352,7 @@ function drawControlsMenu(screenW, screenH, fnt) {
 
     const bindings = [
         ["STICK IZQ / D-PAD",  "Caminar (con inercia)"],
-        ["STICK DER / L1-R1",  "Girar la camara"],
+        ["STICK DER / L1-R1",  "Mirar 360 / arriba-abajo"],
         ["X (CRUZ)",           "Interactuar / Esconderse"],
         ["CIRCULO / ABAJO+O",  "Correr / Giro rapido 180"],
         ["CUADRADO",           "Agacharse (modo sigilo)"],
@@ -4974,6 +5058,7 @@ let bumpCooldown = 0;
 let playerVelX = toF64(0.0);
 let playerVelY = toF64(0.0);
 let playerTurnVel = toF64(0.0);
+let playerPitchVel = toF64(0.0);
 let camShake = toF64(0.0);
 let camBreathPhase = toF64(0.0);
 let quickTurnRem = toF64(0.0);
@@ -5154,6 +5239,7 @@ function resetGame(chapterIdx) {
     playerVelX = toF64(0.0);
     playerVelY = toF64(0.0);
     playerTurnVel = toF64(0.0);
+    playerPitchVel = toF64(0.0);
     camShake = toF64(0.0);
     camBreathPhase = toF64(0.0);
     quickTurnRem = toF64(0.0);
@@ -5174,6 +5260,8 @@ function resetGame(chapterIdx) {
     player.y = toF64(ch.playerSpawn.y);
     player.ang = toF64(ch.playerSpawn.ang);
     player.eyeH = toF64(WORLD_EYE_H);
+    player.eyeBase = toF64(WORLD_EYE_H);
+    player.lookPitch = toF64(0.0);
     player.pitchY = toF64(0.0);
     player.crouched = false;
     player.hiding = false;
@@ -5623,13 +5711,16 @@ Screen.display(() => {
                 quickTurnRem = toF64(Math.PI);
             }
             if ((quickTurnRem - 0.01) > 0) {
-                // Curva ease-out para giro 180° suave y firme
+                // Curva ease-out para giro 180° suave y firme (re-centra levemente la mirada vertical)
                 const qtStep = Math.min(quickTurnRem, toF64(Math.max(0.11, quickTurnRem * 0.24) * dtScale));
                 player.ang = fadd(player.ang, qtStep);
                 quickTurnRem = quickTurnRem - qtStep;
                 playerTurnVel = toF64(0.0);
+                playerPitchVel = toF64(0.0);
+                player.lookPitch = toF64(player.lookPitch * 0.85);
             } else {
                 const rx = toF64((pad.rx || 0) / 128.0);
+                const ry = toF64((pad.ry || 0) / 128.0);
                 const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
                 const turnSpeed = mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn;
                 let tgtTurn = toF64(0.0);
@@ -5638,6 +5729,14 @@ Screen.display(() => {
                 if (pad.pressed(Pads.R1)) tgtTurn = fadd(tgtTurn, turnSpeed);
                 playerTurnVel = fadd(playerTurnVel, (tgtTurn - playerTurnVel) * Math.min(1.0, 0.36 * dtScale));
                 player.ang = fadd(player.ang, playerTurnVel * dtScale);
+
+                // Mirada vertical libre en 1ra persona (Stick Derecho arriba/abajo)
+                let tgtPitch = toF64(0.0);
+                if ((Math.abs(ry) - STICK_DEADZONE) > 0) {
+                    tgtPitch = (-ry) * turnSpeed * 3.1;
+                }
+                playerPitchVel = fadd(playerPitchVel, (tgtPitch - playerPitchVel) * Math.min(1.0, 0.34 * dtScale));
+                player.lookPitch = clampF64(fadd(toF64(player.lookPitch || 0.0), playerPitchVel * dtScale), -2.65, 2.65);
             }
             if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
             else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
@@ -5909,7 +6008,7 @@ Screen.display(() => {
                 shkPitch = ((cinHashByte(frameTick * 11 + 29) - 128) / 128.0) * 0.14 * totalShake;
             }
             player.eyeH = clampF64(fadd(fadd(player.eyeBase, headBobY + breathY), shkY), 0.75, 2.05);
-            player.pitchY = fadd(headBobY * 1.4, shkPitch);
+            player.pitchY = clampF64(fadd(fadd(toF64(player.lookPitch || 0.0), headBobY * 1.4), shkPitch), -2.85, 2.85);
 
             // Parpadeo sutil de linterna cuando queda poca batería (< 20%)
             let effFlashWarm = flashlightWarmup;

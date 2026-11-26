@@ -336,7 +336,7 @@ function drawControlsMenu(screenW, screenH, fnt) {
 
     const bindings = [
         ["STICK IZQ / D-PAD",  "Caminar (con inercia)"],
-        ["STICK DER / L1-R1",  "Girar la camara"],
+        ["STICK DER / L1-R1",  "Mirar 360 / arriba-abajo"],
         ["X (CRUZ)",           "Interactuar / Esconderse"],
         ["CIRCULO / ABAJO+O",  "Correr / Giro rapido 180"],
         ["CUADRADO",           "Agacharse (modo sigilo)"],

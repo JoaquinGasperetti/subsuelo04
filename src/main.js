@@ -234,6 +234,7 @@ let bumpCooldown = 0;
 let playerVelX = toF64(0.0);
 let playerVelY = toF64(0.0);
 let playerTurnVel = toF64(0.0);
+let playerPitchVel = toF64(0.0);
 let camShake = toF64(0.0);
 let camBreathPhase = toF64(0.0);
 let quickTurnRem = toF64(0.0);
@@ -414,6 +415,7 @@ function resetGame(chapterIdx) {
     playerVelX = toF64(0.0);
     playerVelY = toF64(0.0);
     playerTurnVel = toF64(0.0);
+    playerPitchVel = toF64(0.0);
     camShake = toF64(0.0);
     camBreathPhase = toF64(0.0);
     quickTurnRem = toF64(0.0);
@@ -434,6 +436,8 @@ function resetGame(chapterIdx) {
     player.y = toF64(ch.playerSpawn.y);
     player.ang = toF64(ch.playerSpawn.ang);
     player.eyeH = toF64(WORLD_EYE_H);
+    player.eyeBase = toF64(WORLD_EYE_H);
+    player.lookPitch = toF64(0.0);
     player.pitchY = toF64(0.0);
     player.crouched = false;
     player.hiding = false;
@@ -883,13 +887,16 @@ Screen.display(() => {
                 quickTurnRem = toF64(Math.PI);
             }
             if ((quickTurnRem - 0.01) > 0) {
-                // Curva ease-out para giro 180° suave y firme
+                // Curva ease-out para giro 180° suave y firme (re-centra levemente la mirada vertical)
                 const qtStep = Math.min(quickTurnRem, toF64(Math.max(0.11, quickTurnRem * 0.24) * dtScale));
                 player.ang = fadd(player.ang, qtStep);
                 quickTurnRem = quickTurnRem - qtStep;
                 playerTurnVel = toF64(0.0);
+                playerPitchVel = toF64(0.0);
+                player.lookPitch = toF64(player.lookPitch * 0.85);
             } else {
                 const rx = toF64((pad.rx || 0) / 128.0);
+                const ry = toF64((pad.ry || 0) / 128.0);
                 const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
                 const turnSpeed = mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn;
                 let tgtTurn = toF64(0.0);
@@ -898,6 +905,14 @@ Screen.display(() => {
                 if (pad.pressed(Pads.R1)) tgtTurn = fadd(tgtTurn, turnSpeed);
                 playerTurnVel = fadd(playerTurnVel, (tgtTurn - playerTurnVel) * Math.min(1.0, 0.36 * dtScale));
                 player.ang = fadd(player.ang, playerTurnVel * dtScale);
+
+                // Mirada vertical libre en 1ra persona (Stick Derecho arriba/abajo)
+                let tgtPitch = toF64(0.0);
+                if ((Math.abs(ry) - STICK_DEADZONE) > 0) {
+                    tgtPitch = (-ry) * turnSpeed * 3.1;
+                }
+                playerPitchVel = fadd(playerPitchVel, (tgtPitch - playerPitchVel) * Math.min(1.0, 0.34 * dtScale));
+                player.lookPitch = clampF64(fadd(toF64(player.lookPitch || 0.0), playerPitchVel * dtScale), -2.65, 2.65);
             }
             if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
             else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
@@ -1169,7 +1184,7 @@ Screen.display(() => {
                 shkPitch = ((cinHashByte(frameTick * 11 + 29) - 128) / 128.0) * 0.14 * totalShake;
             }
             player.eyeH = clampF64(fadd(fadd(player.eyeBase, headBobY + breathY), shkY), 0.75, 2.05);
-            player.pitchY = fadd(headBobY * 1.4, shkPitch);
+            player.pitchY = clampF64(fadd(fadd(toF64(player.lookPitch || 0.0), headBobY * 1.4), shkPitch), -2.85, 2.85);
 
             // Parpadeo sutil de linterna cuando queda poca batería (< 20%)
             let effFlashWarm = flashlightWarmup;
