@@ -233,6 +233,9 @@ let exhausted = false;
 let bumpCooldown = 0;
 let playerVelX = toF64(0.0);
 let playerVelY = toF64(0.0);
+let playerTurnVel = toF64(0.0);
+let camShake = toF64(0.0);
+let camBreathPhase = toF64(0.0);
 let quickTurnRem = toF64(0.0);
 let playerDecoys = 1;
 let decoyCooldown = 0;
@@ -410,6 +413,9 @@ function resetGame(chapterIdx) {
     bumpCooldown = 0;
     playerVelX = toF64(0.0);
     playerVelY = toF64(0.0);
+    playerTurnVel = toF64(0.0);
+    camShake = toF64(0.0);
+    camBreathPhase = toF64(0.0);
     quickTurnRem = toF64(0.0);
     playerDecoys = 1;
     decoyCooldown = 0;
@@ -619,7 +625,20 @@ Screen.display(() => {
         }
 
         if (gameState === STATE_TITLE) {
-            player.ang = toF64(frameTick * 0.002);
+            if (GAME_SETTINGS.qualityIndex === 0 && hwLoadedChapterIdx < 0) {
+                prepareChapter3D(0);
+            }
+            if (!hwStreamDone && !hwStreamFailed) {
+                tickProgressive3DStream();
+                if (hw3dReady && hwEntityTransforms.length === 0) buildHwEntityTransforms();
+            }
+            player.x = toF64(10.0);
+            player.y = toF64(10.5);
+            player.eyeH = toF64(1.62 + Math.sin(frameTick * 0.015) * 0.05);
+            player.pitchY = toF64(-0.08);
+            player.flashlightOn = true;
+            player.battery = toF64(100.0);
+            player.ang = toF64(frameTick * 0.0022);
             render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.22, frameTick, false, 0.90, 1.0, 1.0, 0.0);
             drawTitleMenu(SCREEN_W, SCREEN_H, titleCursor, frameTick, fnt);
 
@@ -838,9 +857,17 @@ Screen.display(() => {
                 flashlightWarmup = toF64(Math.min(1.0, fadd(flashlightWarmup, 0.14 * dtScale)));
             }
 
-            const targetEyeH = player.hiding ? toF64(1.18) : (player.crouched ? toF64(1.02) : toF64(WORLD_EYE_H));
-            const curEyeH = toF64(player.eyeH !== undefined ? player.eyeH : WORLD_EYE_H);
-            player.eyeH = fadd(curEyeH, (targetEyeH - curEyeH) * Math.min(1.0, 0.22 * dtScale));
+            // Gamefeel: altura base suave + respiración orgánica + headbob + sacudida de impacto
+            const baseEyeTarget = player.hiding ? toF64(1.18) : (player.crouched ? toF64(1.02) : toF64(WORLD_EYE_H));
+            const curEyeBase = toF64(player.eyeBase !== undefined ? player.eyeBase : WORLD_EYE_H);
+            player.eyeBase = fadd(curEyeBase, (baseEyeTarget - curEyeBase) * Math.min(1.0, 0.22 * dtScale));
+            const breathRate = exhausted ? 0.14 : (player.hiding ? 0.09 : 0.045);
+            camBreathPhase = fadd(camBreathPhase, toF64(breathRate * dtScale));
+            if ((camShake - 0.005) > 0) {
+                camShake = toF64(Math.max(0.0, camShake - 0.032 * dtScale));
+            } else {
+                camShake = toF64(0.0);
+            }
 
             let fwd = F64_ZERO, strafe = F64_ZERO;
             const lx = toF64((pad.lx || 0) / 128.0);
@@ -856,16 +883,21 @@ Screen.display(() => {
                 quickTurnRem = toF64(Math.PI);
             }
             if ((quickTurnRem - 0.01) > 0) {
-                const qtStep = Math.min(quickTurnRem, toF64(0.26 * dtScale));
+                // Curva ease-out para giro 180° suave y firme
+                const qtStep = Math.min(quickTurnRem, toF64(Math.max(0.11, quickTurnRem * 0.24) * dtScale));
                 player.ang = fadd(player.ang, qtStep);
                 quickTurnRem = quickTurnRem - qtStep;
+                playerTurnVel = toF64(0.0);
             } else {
                 const rx = toF64((pad.rx || 0) / 128.0);
                 const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
-                const turnSpeed = (mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn) * dtScale;
-                if ((Math.abs(rx) - STICK_DEADZONE) > 0) player.ang = fadd(player.ang, rx * turnSpeed);
-                if (pad.pressed(Pads.L1)) player.ang = player.ang - turnSpeed;
-                if (pad.pressed(Pads.R1)) player.ang = fadd(player.ang, turnSpeed);
+                const turnSpeed = mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn;
+                let tgtTurn = toF64(0.0);
+                if ((Math.abs(rx) - STICK_DEADZONE) > 0) tgtTurn = rx * turnSpeed;
+                if (pad.pressed(Pads.L1)) tgtTurn = tgtTurn - turnSpeed;
+                if (pad.pressed(Pads.R1)) tgtTurn = fadd(tgtTurn, turnSpeed);
+                playerTurnVel = fadd(playerTurnVel, (tgtTurn - playerTurnVel) * Math.min(1.0, 0.36 * dtScale));
+                player.ang = fadd(player.ang, playerTurnVel * dtScale);
             }
             if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
             else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
@@ -916,6 +948,7 @@ Screen.display(() => {
             if (bumpedGate && bumpCooldown === 0) {
                 bumpCooldown = 60;
                 playSfx("gate_locked", 0, 0.9);
+                camShake = toF64(0.45);
                 triggerRumble(110, 1);
                 triggerScreenFlash(200, 60, 20, 42);
                 showRadio("REJA BLOQUEADA: Activa el disyuntor central para liberar el paso.", 160);
@@ -1058,6 +1091,7 @@ Screen.display(() => {
                                         if (worldGrid[gy][gx] === 5) worldGrid[gy][gx] = 0;
                                     }
                                 }
+                                camShake = toF64(0.65);
                                 triggerScreenFlash(60, 255, 110, 62);
                                 triggerRumble(210, 1);
                                 showPopup("REJAS DESBLOQUEADAS");
@@ -1085,11 +1119,13 @@ Screen.display(() => {
 
             if (ai.chaseIntroStarted) {
                 setMusicTrack("chase", true);
+                camShake = toF64(0.55);
                 showPopup("TE HA DETECTADO...", 120);
                 showRadio("ALGO SE ACERCA... PREPARATE PARA CORRER!", 260);
                 triggerScreenFlash(160, 20, 25, 36);
             } else if (ai.chaseHuntStarted) {
                 setMusicTrack("chase", false);
+                camShake = toF64(0.85);
                 showPopup("! TE PERSIGUE !", 95);
                 showRadio("EL ACECHADOR TE PERSIGUE! CORRE!", 190);
                 triggerScreenFlash(220, 18, 22, 56);
@@ -1120,10 +1156,31 @@ Screen.display(() => {
                 return;
             }
 
+            // Aplicar headbob, respiración orgánica, cabeceo sutil y sacudida de impacto
+            const bobAmp = isMoving ? (isSprinting ? 0.058 : (player.crouched ? 0.015 : 0.032)) : 0.0;
+            const headBobY = GAME_SETTINGS.bob ? (Math.sin(player.bobPhase * 2.0) * bobAmp) : 0.0;
+            const breathAmp = exhausted ? 0.024 : (0.010 + dangerRatio * 0.016);
+            const breathY = Math.sin(camBreathPhase) * breathAmp;
+            let shkY = 0.0;
+            let shkPitch = 0.0;
+            const totalShake = Math.max(camShake, (dangerRatio - 0.55) > 0 ? (dangerRatio - 0.55) * 0.45 : 0.0);
+            if ((totalShake - 0.01) > 0) {
+                shkY = ((cinHashByte(frameTick * 7 + 13) - 128) / 128.0) * 0.055 * totalShake;
+                shkPitch = ((cinHashByte(frameTick * 11 + 29) - 128) / 128.0) * 0.14 * totalShake;
+            }
+            player.eyeH = clampF64(fadd(fadd(player.eyeBase, headBobY + breathY), shkY), 0.75, 2.05);
+            player.pitchY = fadd(headBobY * 1.4, shkPitch);
+
+            // Parpadeo sutil de linterna cuando queda poca batería (< 20%)
+            let effFlashWarm = flashlightWarmup;
+            if (player.flashlightOn && ((player.battery - 20.0) < 0) && ((player.battery - 0.0) > 0)) {
+                if (cinHashByte(frameTick * 5 + 17) < 28) effFlashWarm = toF64(0.32);
+            }
+
             render3DWorld(
                 SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities,
                 dangerRatio, frameTick, fusesCollected === 4, currentFov,
-                flashlightWarmup, mapAnim, ai.sideBias
+                effFlashWarm, mapAnim, ai.sideBias
             );
 
             if (GAME_SETTINGS.overlays) {
@@ -1157,8 +1214,6 @@ Screen.display(() => {
             const { sx, sy } = getSafeMargins();
             const hudW = SCREEN_W - sx * 2;
             const topY = sy;
-            Draw.rect(sx, topY, hudW, 38, rgba(4, 6, 10, 124));
-            Draw.rect(sx, topY + 37, hudW, 2, rgba(70, 95, 115, 120));
 
             if (player.hiding) {
                 Draw.rect(0, 0, SCREEN_W, 92, rgba(0, 0, 0, 118));
@@ -1166,23 +1221,70 @@ Screen.display(() => {
                 Draw.rect(0, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
                 Draw.rect(SCREEN_W - 68, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
             }
+
+            // Retícula central sutil (se ilumina en dorado cuando hay interacción [X])
+            if (!mapOpen && !player.hiding) {
+                const cx = SCREEN_W >> 1;
+                const cy = SCREEN_H >> 1;
+                if (activeInteractLabel.length > 0) {
+                    const rCol = rgba(250, 218, 100, 118);
+                    Draw.rect(cx - 1, cy - 1, 3, 3, rCol);
+                    Draw.rect(cx - 10, cy - 5, 2, 10, rCol);
+                    Draw.rect(cx + 8, cy - 5, 2, 10, rCol);
+                } else {
+                    Draw.rect(cx - 1, cy - 1, 2, 2, rgba(220, 230, 240, 52));
+                }
+            }
+
+            // Aviso contextual [X] limpio y centrado
             if (activeInteractLabel.length > 0 && !mapOpen) {
-                const prW = Math.min(430, SCREEN_W - sx * 2 - 20);
+                const prW = Math.min(436, hudW - 24);
                 const prX = (SCREEN_W - prW) >> 1;
-                const prY = SCREEN_H - sy - 82;
-                Draw.rect(prX, prY, prW, 30, rgba(8, 10, 16, 118));
+                const prY = SCREEN_H - sy - 86;
+                Draw.rect(prX, prY, prW, 32, rgba(8, 10, 16, 122));
                 Draw.rect(prX, prY, prW, 2, rgba(250, 215, 95, 124));
+                Draw.rect(prX, prY + 30, prW, 1, rgba(90, 102, 120, 100));
                 fnt.scale = Math.fround(0.70);
                 fnt.color = rgba(250, 225, 115, 128);
-                fnt.print(prX + 14, prY + 6, activeInteractLabel);
+                fnt.print(prX + 14, prY + 7, activeInteractLabel);
             }
-            fnt.scale = Math.fround(0.68);
-            fnt.color = rgba(245, 245, 250, 128);
-            fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
-            fnt.color = rgba(120, 225, 255, 128);
-            fnt.print(sx + 102, topY + 8, DECOY_HUD_LABELS[playerDecoys] || "SEN:0");
-            fnt.color = player.crouched ? rgba(95, 245, 135, 128) : rgba(175, 185, 200, 120);
-            fnt.print(sx + 178, topY + 8, player.crouched ? "SIGILO" : getActiveChapter().code);
+
+            // Barra HUD superior táctica (sin superposiciones)
+            Draw.rect(sx, topY, hudW, 36, rgba(6, 8, 13, 122));
+            Draw.rect(sx, topY + 35, hudW, 2, rgba(82, 100, 122, 114));
+
+            fnt.scale = Math.fround(0.66);
+            fnt.color = player.crouched ? rgba(92, 244, 138, 128) : rgba(250, 214, 96, 128);
+            fnt.print(sx + 8, topY + 8, player.crouched ? "SIGILO" : getActiveChapter().code);
+
+            fnt.color = rgba(242, 244, 250, 128);
+            fnt.print(sx + 82, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
+
+            fnt.color = rgba(96, 224, 255, 128);
+            fnt.print(sx + 162, topY + 8, DECOY_HUD_LABELS[playerDecoys] || "SEN:0");
+
+            fnt.color = rgba(250, 215, 95, 128);
+            fnt.print(sx + 224, topY + 8, getCompassLabel(player.ang));
+
+            fnt.color = rgba(225, 232, 240, 128);
+            fnt.print(sx + 272, topY + 8, "LUZ");
+            Draw.rect(sx + 312, topY + 11, 54, 12, rgba(20, 28, 38, 128));
+            const batFill = Math.max(0, (player.battery * 0.50) | 0);
+            const batCol = ((player.battery - 25.0) < 0) ? rgba(255, 78, 48, 128) : rgba(62, 224, 255, 128);
+            if (batFill > 0) Draw.rect(sx + 314, topY + 13, batFill, 8, batCol);
+
+            fnt.color = exhausted ? rgba(255, 90, 90, 128) : rgba(225, 232, 240, 128);
+            fnt.print(sx + 374, topY + 8, "STM");
+            Draw.rect(sx + 414, topY + 11, 54, 12, rgba(24, 24, 34, 128));
+            const stamFill = Math.max(0, (player.stamina * 0.50) | 0);
+            const stamCol = exhausted ? rgba(255, 65, 65, 128) : rgba(92, 240, 136, 128);
+            if (stamFill > 0) Draw.rect(sx + 416, topY + 13, stamFill, 8, stamCol);
+
+            const ecgCol = ((dangerRatio - 0.45) > 0) ? rgba(255, 65, 65, 128) : rgba(90, 245, 130, 128);
+            const ecgBaseX = sx + hudW - 102;
+            const ecgW = 94;
+            Draw.rect(ecgBaseX, topY + 6, ecgW, 22, rgba(6, 14, 10, 120));
+
             if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
                 const pendStep = HW3D_STREAM_STEPS[hwStreamStep];
                 Draw.rect(SCREEN_W - sx - 280, topY + 40, 276, 26, rgba(12, 16, 26, 118));
@@ -1190,11 +1292,11 @@ Screen.display(() => {
                 fnt.color = rgba(110, 230, 255, 128);
                 fnt.print(SCREEN_W - sx - 272, topY + 44, (STREAM_3D_BADGES[hwStreamStep] || "3D...") + (pendStep ? " " + pendStep.label : ""));
             }
-            if (hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
-                Draw.rect(SCREEN_W - sx - 210, topY + 40, 206, 24, rgba(8, 14, 22, 118));
+            if (debugMode > 0 && hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
+                Draw.rect(SCREEN_W - sx - 210, topY + 68, 206, 24, rgba(8, 14, 22, 118));
                 fnt.scale = Math.fround(0.60);
                 fnt.color = rgba(120, 245, 160, 128);
-                fnt.print(SCREEN_W - sx - 202, topY + 43, hwVramLabel);
+                fnt.print(SCREEN_W - sx - 202, topY + 71, hwVramLabel);
             }
             if (GAME_SETTINGS.qualityIndex === 0 && hwStreamFailed) {
                 Draw.rect(SCREEN_W - sx - 340, topY + 40, 336, 26, rgba(40, 8, 8, 122));
@@ -1202,32 +1304,6 @@ Screen.display(() => {
                 fnt.color = rgba(255, 150, 130, 128);
                 fnt.print(SCREEN_W - sx - 332, topY + 44, "3D FALLO: " + String(hwLoadErrorMsg || "?").slice(0, 28));
             }
-
-            fnt.color = rgba(250, 215, 95, 128);
-            fnt.print(sx + 114, topY + 8, getCompassLabel(player.ang));
-
-            fnt.color = rgba(235, 235, 240, 128);
-            fnt.print(sx + 174, topY + 8, "LUZ");
-            Draw.rect(sx + 224, topY + 12, 56, 14, rgba(20, 30, 38, 128));
-            const batFill = Math.max(0, (player.battery * 0.52) | 0);
-            const batCol = ((player.battery - 25.0) < 0) ? rgba(255, 80, 45, 128) : rgba(55, 225, 255, 128);
-            if (batFill > 0) Draw.rect(sx + 226, topY + 14, batFill, 10, batCol);
-
-            fnt.color = exhausted ? rgba(255, 95, 95, 128) : rgba(235, 235, 240, 128);
-            fnt.print(sx + 290, topY + 8, "STM");
-            Draw.rect(sx + 342, topY + 12, 56, 14, rgba(25, 25, 32, 128));
-            const stamFill = Math.max(0, (player.stamina * 0.52) | 0);
-            const stamCol = exhausted ? rgba(255, 65, 65, 128) : rgba(95, 240, 135, 128);
-            if (stamFill > 0) Draw.rect(sx + 344, topY + 14, stamFill, 10, stamCol);
-
-            const bpm = (fadd(72.0, dangerRatio * 118.0)) | 0;
-            const ecgCol = ((dangerRatio - 0.45) > 0) ? rgba(255, 65, 65, 128) : rgba(90, 245, 130, 128);
-            fnt.color = ecgCol;
-            fnt.print(sx + 408, topY + 8, ["BPM:", String(bpm)].join(""));
-
-            const ecgBaseX = sx + hudW - 106;
-            const ecgW = 96;
-            Draw.rect(ecgBaseX, topY + 5, ecgW, 20, rgba(6, 14, 10, 120));
             const beatPeriod = Math.max(12, (36.0 - dangerRatio * 18.0) | 0);
             let prevEx = ecgBaseX;
             let prevEy = topY + 15;

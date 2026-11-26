@@ -2067,6 +2067,7 @@ function renderHardware3DWorld(
         if (hasDepthToggle) {
             try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {}
         }
+        restore2DRenderState(screenW, screenH);
     }
 
     // 5. Linterna en mano (viewmodel 2D) y vineta sutil (solo en juego activo)
@@ -2095,7 +2096,7 @@ function render3DWorld(
     dangerRatio, frameTick, exitUnlocked, fov, flashIntensity,
     mapAnim = 0.0, sideBias = 0.0
 ) {
-    if (hw3dReady && GAME_SETTINGS.qualityIndex === 0 && (gameState === STATE_PLAY || gameState === STATE_CINEMATIC)) {
+    if (hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
         hwDrawFailed = false;
         try {
             renderHardware3DWorld(
@@ -2930,25 +2931,36 @@ function renderAnimatedMapPDA(screenW, screenH, grid, player, stalker, entities,
 
 // --- MODULE: src/menus.js ---
 // ============================================================================
-// Interfaz completa de Menús PS2 (Título, Opciones, Pausa, Expediente, Finales)
-// Diseñada con área segura CRT para evitar recortes por overscan en TV reales
+// Interfaz estética AAA PS2 (Título abierto sobre 3D, Opciones con barras y
+// badges, Controles, Expediente 8 notas, Pausa, Cinemáticas y Pantallas Finales)
+// - CERO allocaciones innecesarias por cuadro, alfa GS 0..128, escala >= 0.70
+// - Área segura CRT (NTSC 640x448 y PAL 640x512)
 // ============================================================================
 
+const COL_BG_DIM       = rgba(0, 0, 5, 86);
+const COL_BORDER_RED   = rgba(175, 34, 40, 124);
+const COL_BORDER_STEEL = rgba(92, 106, 126, 112);
+const COL_PANEL_BG     = rgba(7, 8, 13, 122);
+const COL_HEADER_BG    = rgba(24, 9, 13, 126);
+const COL_ROW_DARK     = rgba(13, 14, 21, 108);
+const COL_ROW_ALT      = rgba(18, 19, 28, 108);
+const COL_SEL_BG       = rgba(118, 20, 28, 122);
+const COL_SEL_GLOW     = rgba(210, 42, 48, 42);
+const COL_SEL_BAR      = rgba(245, 58, 62, 128);
+const COL_TITLE_RED    = rgba(242, 46, 50, 128);
+const COL_TITLE_GHOST  = rgba(120, 18, 24, 72);
+const COL_WHITE        = rgba(238, 240, 246, 128);
+const COL_MUTED        = rgba(152, 160, 176, 128);
+const COL_GOLD         = rgba(250, 214, 96, 128);
+const COL_CYAN         = rgba(86, 224, 255, 128);
+const COL_GREEN        = rgba(88, 242, 138, 128);
+const COL_KEYCAP_BG    = rgba(28, 32, 44, 124);
 
-
-
-const COL_BG_DIM     = rgba(0, 0, 4, 88);
-const COL_BORDER_RED = rgba(120, 26, 30, 122);
-const COL_PANEL_BG   = rgba(8, 6, 10, 122);
-const COL_HEADER_BG  = rgba(34, 10, 14, 124);
-const COL_SEL_BG     = rgba(115, 22, 28, 118);
-const COL_SEL_BAR    = rgba(245, 65, 65, 128);
-const COL_TITLE_RED  = rgba(242, 48, 48, 128);
-const COL_WHITE      = rgba(236, 236, 242, 128);
-const COL_MUTED      = rgba(155, 160, 172, 128);
-const COL_GOLD       = rgba(250, 215, 95, 128);
-const COL_CYAN       = rgba(85, 225, 255, 128);
-const COL_GREEN      = rgba(95, 245, 135, 128);
+// Estado visual suave para cursores animados en menús
+let uiTitleSlideY = -1.0;
+let uiOptSlideY   = -1.0;
+let uiPauseSlideY = -1.0;
+let uiCinSlideY   = -1.0;
 
 function getSafeMargins() {
     return GAME_SETTINGS.crtSafe
@@ -2956,15 +2968,42 @@ function getSafeMargins() {
         : { sx: 10, sy: 6 };
 }
 
-function drawPanel(x, y, w, h, title, fnt, accentCol = COL_BORDER_RED) {
-    Draw.rect(x - 3, y - 3, w + 6, h + 6, accentCol);
+function uiLerpY(cur, target) {
+    if (cur < 0) return target;
+    return fadd(cur, (target - cur) * 0.34);
+}
+
+// Dibuja esquinas arquitectónicas en L (estilo industrial / visor táctico PS2)
+function drawCornerBrackets(x, y, w, h, len, col) {
+    Draw.rect(x, y, len, 2, col);
+    Draw.rect(x, y, 2, len, col);
+    Draw.rect(x + w - len, y, len, 2, col);
+    Draw.rect(x + w - 2, y, 2, len, col);
+    Draw.rect(x, y + h - 2, len, 2, col);
+    Draw.rect(x, y + h - len, 2, len, col);
+    Draw.rect(x + w - len, y + h - 2, len, 2, col);
+    Draw.rect(x + w - 2, y + h - len, 2, len, col);
+}
+
+function drawPanel(x, y, w, h, title, fnt, accentCol = COL_BORDER_RED, frameTick = 0) {
+    // Sombra exterior suave + cuerpo obsidiana
+    Draw.rect(x - 4, y - 4, w + 8, h + 8, rgba(0, 0, 0, 74));
+    Draw.rect(x - 1, y - 1, w + 2, h + 2, COL_BORDER_STEEL);
     Draw.rect(x, y, w, h, COL_PANEL_BG);
+
+    // Filete superior de acento y esquinas L
+    Draw.rect(x, y, w, 3, accentCol);
+    drawCornerBrackets(x - 2, y - 2, w + 4, h + 4, 16, accentCol);
+
     if (title) {
-        Draw.rect(x, y, w, 36, COL_HEADER_BG);
-        Draw.rect(x, y + 36, w, 2, accentCol);
-        fnt.scale = Math.fround(0.78);
+        Draw.rect(x, y + 3, w, 35, COL_HEADER_BG);
+        Draw.rect(x, y + 38, w, 1, accentCol);
+        // Indicador de estado parpadeante en cabecera
+        const pulse = ((frameTick % 56) < 34);
+        Draw.rect(x + 14, y + 16, 7, 7, pulse ? accentCol : rgba(75, 22, 28, 110));
+        fnt.scale = Math.fround(0.76);
         fnt.color = COL_WHITE;
-        fnt.print(x + 14, y + 7, title);
+        fnt.print(x + 28, y + 10, title);
     }
 }
 
@@ -2993,17 +3032,20 @@ const TITLE_ITEMS_NIGHTMARE = [
     "CINEMATICAS (TEST)"
 ];
 const CINEMATIC_MENU_ITEMS = [
-    { title: "01. CAP 1 - INTRO RECUPERADA",  meta: "44s | 7 PLANOS | Subsuelo 04" },
-    { title: "02. CAP 2 - TUNELES CALDERAS",  meta: "14s | 3 PLANOS | Nivel -2 y Valdez" },
-    { title: "03. CAP 3 - CONTENCION RITUAL", meta: "14s | 3 PLANOS | Origen Sujeto 04" },
-    { title: "04. FINAL - EVACUACION NORTE",  meta: "22s | 4 PLANOS | Escape a superficie" },
-    { title: "VOLVER AL MENU PRINCIPAL",      meta: "Regresar al titulo" }
+    { badge: "CAP 1", title: "INTRO - CINTA RECUPERADA",  meta: "44s  |  7 PLANOS  |  Subsuelo 04" },
+    { badge: "CAP 2", title: "TUNELES DE MANTENIMIENTO",  meta: "14s  |  3 PLANOS  |  Nivel -2 y Valdez" },
+    { badge: "CAP 3", title: "PABELLON DE CONTENCION",    meta: "14s  |  3 PLANOS  |  Origen Sujeto 04" },
+    { badge: "FINAL", title: "EVACUACION - SALIDA NORTE", meta: "22s  |  4 PLANOS  |  Escape a superficie" },
+    { badge: "MENU",  title: "VOLVER AL MENU PRINCIPAL",  meta: "Regresar a la pantalla de titulo" }
 ];
 const DECOY_HUD_LABELS = ["SEN:0", "SEN:1", "SEN:2", "SEN:3"];
 const LORE_TABS_OPEN = ["NOTA #01", "NOTA #02", "NOTA #03", "NOTA #04"];
 const LORE_TABS_LOCK = ["BLOQ #01", "BLOQ #02", "BLOQ #03", "BLOQ #04"];
-const PAUSE_REG_LABELS = ["REGISTROS (0/4)", "REGISTROS (1/4)", "REGISTROS (2/4)", "REGISTROS (3/4)", "REGISTROS (4/4)"];
-const END_OPTS_WIN = ["JUGAR DE NUEVO", "VOLVER AL MENU PRINCIPAL"];
+const PAUSE_REG_LABELS = [
+    "REGISTROS (0/8)", "REGISTROS (1/8)", "REGISTROS (2/8)", "REGISTROS (3/8)",
+    "REGISTROS (4/8)", "REGISTROS (5/8)", "REGISTROS (6/8)", "REGISTROS (7/8)", "REGISTROS (8/8)"
+];
+const END_OPTS_WIN  = ["JUGAR DE NUEVO", "VOLVER AL MENU PRINCIPAL"];
 const END_OPTS_DEAD = ["REINTENTAR", "VOLVER AL MENU PRINCIPAL"];
 const VOL_LABELS = ["0%", "25%", "50%", "75%", "100%"];
 const FUSE_HUD_LABELS = ["FUS:0/4", "FUS:1/4", "FUS:2/4", "FUS:3/4", "FUS:4/4"];
@@ -3020,82 +3062,111 @@ const BREAKER_HUD_LABELS = [
     "JUNTA 4 FUSIBLES (1/4) [SELECT: MAPA]",
     "JUNTA 4 FUSIBLES (2/4) [SELECT: MAPA]",
     "JUNTA 4 FUSIBLES (3/4) [SELECT: MAPA]",
-    "SALIDA NORTE ABIERTA! [SELECT: MAPA]"
+    "SALIDA NORTE ABIERTA! [X EN COMPUERTA]"
 ];
 
+// ============================================================================
+// PANTALLA DE TÍTULO CINEMATOGRÁFICA (deja respirar el escenario 3D a la derecha)
+// ============================================================================
 function drawTitleMenu(screenW, screenH, cursor, frameTick, fnt) {
     const { sx, sy } = getSafeMargins();
-    Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
 
-    // Línea de barrido VHS sutil en pantalla de título
+    // Gradiente lateral izquierdo en 5 franjas para contraste AAA sin tapar el fondo 3D
+    Draw.rect(0, 0, 260, screenH, rgba(4, 4, 8, 118));
+    Draw.rect(260, 0, 70, screenH, rgba(4, 4, 8, 96));
+    Draw.rect(330, 0, 60, screenH, rgba(4, 4, 8, 68));
+    Draw.rect(390, 0, 55, screenH, rgba(4, 4, 8, 38));
+    Draw.rect(445, 0, 50, screenH, rgba(4, 4, 8, 16));
+
+    // Bandas letterbox finas superior e inferior
+    Draw.rect(0, 0, screenW, sy + 6, rgba(0, 0, 0, 118));
+    Draw.rect(0, screenH - sy - 26, screenW, sy + 26, rgba(0, 0, 0, 118));
+    Draw.rect(0, sy + 6, screenW, 1, rgba(95, 24, 30, 100));
+    Draw.rect(0, screenH - sy - 26, screenW, 1, rgba(95, 24, 30, 100));
+
+    // Barrido VHS sutil
     if (GAME_SETTINGS.overlays) {
-        const scanY = (frameTick * 3) % screenH;
-        Draw.rect(0, scanY, screenW, 3, rgba(220, 45, 45, 26));
+        const scanY = (frameTick * 2) % screenH;
+        Draw.rect(0, scanY, screenW, 2, rgba(220, 45, 50, 22));
     }
 
-    const panelW = screenW - sx * 2 - 20;
-    const panelH = screenH - sy * 2 - 16;
-    const px = (screenW - panelW) >> 1;
-    const py = (screenH - panelH) >> 1;
+    // Esquinas CCTV en el encuadre derecho abierto
+    drawCornerBrackets(sx, sy + 14, screenW - sx * 2, screenH - sy * 2 - 48, 14, rgba(160, 175, 195, 62));
 
-    drawPanel(px, py, panelW, panelH, null, fnt);
+    // Bloque tipográfico principal (con leve parpadeo eléctrico + sombra roja)
+    const flicker = ((frameTick % 149) < 3 || (frameTick % 211) === 0) ? 0.58 : 1.0;
+    const tx = sx + 8;
+    const ty = sy + 24;
 
-    // Cabecera cinematográfica
-    Draw.rect(px, py, panelW, 84, rgba(26, 6, 10, 124));
-    Draw.rect(px, py + 84, panelW, 2, COL_SEL_BAR);
+    fnt.scale = Math.fround(1.36);
+    fnt.color = COL_TITLE_GHOST;
+    fnt.print(tx + 3, ty + 2, "SUBSUELO 04");
+    fnt.color = rgba((244 * flicker) | 0, (44 * flicker) | 0, (48 * flicker) | 0, 128);
+    fnt.print(tx, ty, "SUBSUELO 04");
 
-    const flicker = ((frameTick % 131) < 4) ? 0.55 : 1.0;
-    fnt.scale = Math.fround(1.25);
-    fnt.color = rgba((242 * flicker) | 0, (44 * flicker) | 0, (44 * flicker) | 0, 128);
-    fnt.print(px + 20, py + 10, "SUBSUELO 04");
+    // Filete rojo + subtítulo
+    Draw.rect(tx, ty + 44, 240, 2, COL_SEL_BAR);
+    Draw.rect(tx + 240, ty + 44, 72, 2, rgba(110, 30, 36, 96));
 
     fnt.scale = Math.fround(0.76);
     fnt.color = COL_GOLD;
-    fnt.print(px + 22, py + 52, "EL ACECHADOR - PS2");
+    fnt.print(tx, ty + 52, "EL ACECHADOR   //   PLAYSTATION 2");
 
-    // Insignia de récord / Memory Card
-    fnt.scale = Math.fround(0.72);
-    const best = GAME_SETTINGS.difficulty === 1 ? RECORDS.bestNightmareSec : RECORDS.bestNormalSec;
-    if (best > 0) {
-        fnt.color = COL_GREEN;
-        fnt.print(px + panelW - 210, py + 14, ["RECORD: ", formatTime(best)].join(""));
-    } else {
-        fnt.color = COL_MUTED;
-        fnt.print(px + panelW - 210, py + 14, "HK ENTERTAINMENT");
-    }
-    fnt.color = RECORDS.mcAvailable ? COL_CYAN : COL_MUTED;
-    fnt.print(px + panelW - 210, py + 44, RECORDS.mcAvailable ? "MC0: OK" : "SIN MC0");
-
-    // Opciones del Menú Principal (cadenas estáticas sin concatenación por frame para QuickJS PS2)
+    // Lista de opciones con barra deslizante animada
     const items = GAME_SETTINGS.difficulty === 1 ? TITLE_ITEMS_NIGHTMARE : TITLE_ITEMS_NORMAL;
-
-    const listY = py + 96;
+    const listY = ty + 90;
     const rowH = 38;
+    const listW = Math.min(342, screenW - sx * 2 - 16);
+
+    const targetY = toF64(listY + cursor * rowH - 3);
+    uiTitleSlideY = uiLerpY(uiTitleSlideY, targetY);
+    const slideYi = uiTitleSlideY | 0;
+
+    // Resplandor + píldora del ítem activo
+    Draw.rect(tx - 4, slideYi - 2, listW + 8, 36, COL_SEL_GLOW);
+    Draw.rect(tx, slideYi, listW, 32, COL_SEL_BG);
+    Draw.rect(tx, slideYi, 5, 32, COL_SEL_BAR);
+    Draw.rect(tx, slideYi, listW, 1, rgba(245, 95, 95, 110));
+
     for (let i = 0; i < items.length; i++) {
         const ry = listY + i * rowH;
         const selected = (i === cursor);
-        if (selected) {
-            Draw.rect(px + 18, ry - 3, panelW - 36, 32, COL_SEL_BG);
-            Draw.rect(px + 18, ry - 3, 6, 32, COL_SEL_BAR);
-        }
-        fnt.scale = Math.fround(selected ? 0.80 : 0.74);
+        fnt.scale = Math.fround(selected ? 0.78 : 0.72);
         fnt.color = selected ? COL_GOLD : COL_WHITE;
         if (selected) {
-            fnt.print(px + 32, ry + 2, ">");
-            fnt.print(px + 54, ry + 2, items[i]);
+            fnt.print(tx + 14, ry + 2, ">");
+            fnt.print(tx + 34, ry + 2, items[i]);
         } else {
-            fnt.print(px + 48, ry + 2, items[i]);
+            fnt.print(tx + 20, ry + 3, items[i]);
         }
     }
 
+    // Panel lateral derecho minimalista (estado del sistema, récord y campaña)
+    const rx = screenW - sx - 188;
+    const ryInfo = sy + 28;
+    Draw.rect(rx - 10, ryInfo - 4, 192, 108, rgba(8, 10, 15, 98));
+    Draw.rect(rx - 10, ryInfo - 4, 192, 2, COL_BORDER_STEEL);
+    fnt.scale = Math.fround(0.70);
+    fnt.color = COL_MUTED;
+    fnt.print(rx, ryInfo + 4, "HK ENTERTAINMENT");
+    fnt.color = RECORDS.mcAvailable ? COL_CYAN : COL_MUTED;
+    fnt.print(rx, ryInfo + 28, RECORDS.mcAvailable ? "MC0: CONECTADA" : "MC0: SIN TARJETA");
+    const best = GAME_SETTINGS.difficulty === 1 ? RECORDS.bestNightmareSec : RECORDS.bestNormalSec;
+    fnt.color = best > 0 ? COL_GREEN : COL_MUTED;
+    fnt.print(rx, ryInfo + 52, best > 0 ? ["RECORD: ", formatTime(best)].join("") : "SIN ESCAPES AUN");
+    fnt.color = COL_GOLD;
+    fnt.print(rx, ryInfo + 76, ["CAMPANA: CAP ", String(RECORDS.maxChapterUnlocked || 1), "/3"].join(""));
+
     // Pie de navegación
-    const footY = py + panelH - 36;
-    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
-    fnt.scale = Math.fround(0.72);
+    const footY = screenH - sy - 20;
+    fnt.scale = Math.fround(0.70);
     fnt.color = COL_WHITE;
-    fnt.print(px + 18, footY, "[D-PAD] ELEGIR   [X/START] ACEPTAR");
+    fnt.print(sx + 8, footY, "[D-PAD] ELEGIR   [IZQ/DER] DIFICULTAD   [X/START] ACEPTAR");
 }
 
+// ============================================================================
+// MENÚ DE OPCIONES CON BARRA DE VOLUMEN Y BADGES DE ESTADO
+// ============================================================================
 function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
     const { sx, sy } = getSafeMargins();
     Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
@@ -3114,48 +3185,76 @@ function drawOptionsMenu(screenW, screenH, cursor, saveFeedbackTimer, fnt) {
         ? "ERROR VU1"
         : QUALITY_LABELS[GAME_SETTINGS.qualityIndex];
     const rows = [
-        { label: "MOTOR GRAFICO",  val: qualityLabel },
-        { label: "ASPECTO TV",     val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3" },
-        { label: "MARGEN CRT",     val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO" },
-        { label: "SENSIBILIDAD",   val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex] },
-        { label: "VIBRACION",      val: GAME_SETTINGS.rumble ? "SI" : "NO" },
-        { label: "EFECTOS VHS",    val: GAME_SETTINGS.overlays ? "SI" : "NO" },
-        { label: "AUDIO",          val: audioVal },
-        { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO" },
-        { label: "OMITIR INTRO",   val: GAME_SETTINGS.skipIntro ? "SI" : "NO" },
-        { label: "GUARDAR",        val: "[X]" }
+        { label: "MOTOR GRAFICO",    val: qualityLabel,                                  kind: "cyan" },
+        { label: "ASPECTO TV",       val: GAME_SETTINGS.aspect16x9 ? "16:9" : "4:3",     kind: "cyan" },
+        { label: "MARGEN CRT",       val: GAME_SETTINGS.crtSafe ? "SEGURO" : "COMPLETO", kind: "bool", on: GAME_SETTINGS.crtSafe },
+        { label: "SENSIBILIDAD",     val: SENS_LABELS[GAME_SETTINGS.sensitivityIndex],   kind: "cyan" },
+        { label: "VIBRACION DS2",    val: GAME_SETTINGS.rumble ? "SI" : "NO",            kind: "bool", on: GAME_SETTINGS.rumble },
+        { label: "EFECTOS VHS",      val: GAME_SETTINGS.overlays ? "SI" : "NO",          kind: "bool", on: GAME_SETTINGS.overlays },
+        { label: "VOLUMEN AUDIO",    val: audioVal,                                      kind: "vol"  },
+        { label: "ESTADISTICAS PS2", val: GAME_SETTINGS.showFps ? "SI" : "NO",           kind: "bool", on: GAME_SETTINGS.showFps },
+        { label: "OMITIR INTRO",     val: GAME_SETTINGS.skipIntro ? "SI" : "NO",         kind: "bool", on: GAME_SETTINGS.skipIntro },
+        { label: "GUARDAR EN MC0",   val: "[X] GUARDAR",                                 kind: "save" }
     ];
 
-    const startY = py + 44;
+    const startY = py + 45;
     const rowH = 30;
+    uiOptSlideY = uiLerpY(uiOptSlideY, toF64(startY + cursor * rowH - 2));
+
+    for (let i = 0; i < rows.length; i++) {
+        const ry = startY + i * rowH;
+        Draw.rect(px + 14, ry - 2, panelW - 28, 27, (i & 1) ? COL_ROW_ALT : COL_ROW_DARK);
+    }
+
+    // Resaltado animado
+    const syi = uiOptSlideY | 0;
+    Draw.rect(px + 14, syi, panelW - 28, 27, COL_SEL_BG);
+    Draw.rect(px + 14, syi, 5, 27, COL_SEL_BAR);
+
     for (let i = 0; i < rows.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
-        if (sel) {
-            Draw.rect(px + 14, ry - 2, panelW - 28, 27, COL_SEL_BG);
-            Draw.rect(px + 14, ry - 2, 5, 27, COL_SEL_BAR);
-        }
+        const r = rows[i];
+
         fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
-        fnt.print(px + 24, ry + 1, rows[i].label);
+        fnt.print(px + 26, ry + 2, r.label);
 
-        fnt.color = sel ? COL_CYAN : COL_WHITE;
-        const valText = (i < rows.length - 1) ? ["< ", String(rows[i].val), " >"].join("") : String(rows[i].val);
-        fnt.print(px + panelW - 250, ry + 1, valText);
+        const vx = px + panelW - 238;
+        if (r.kind === "vol") {
+            // Barra segmentada de 4 bloques para volumen
+            for (let seg = 0; seg < 4; seg++) {
+                const active = (volIdx > seg) && GAME_SETTINGS.audioVolume > 0;
+                Draw.rect(vx + seg * 22, ry + 7, 18, 10, active ? COL_CYAN : rgba(36, 42, 54, 120));
+            }
+            fnt.color = sel ? COL_GOLD : COL_WHITE;
+            fnt.print(vx + 96, ry + 2, r.val);
+        } else {
+            let vCol = COL_WHITE;
+            if (r.kind === "bool") vCol = r.on ? COL_GREEN : COL_MUTED;
+            else if (r.kind === "cyan") vCol = COL_CYAN;
+            else if (r.kind === "save") vCol = COL_GOLD;
+            fnt.color = sel ? (r.kind === "bool" ? vCol : COL_GOLD) : vCol;
+            const valText = (i < rows.length - 1) ? ["< ", String(r.val), " >"].join("") : String(r.val);
+            fnt.print(vx, ry + 2, valText);
+        }
     }
 
-    const footY = py + panelH - 36;
-    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    const footY = py + panelH - 34;
+    Draw.rect(px + 14, footY - 8, panelW - 28, 1, COL_BORDER_STEEL);
     fnt.scale = Math.fround(0.70);
     if (saveFeedbackTimer > 0) {
         fnt.color = COL_GREEN;
-        fnt.print(px + 18, footY, "AJUSTES GUARDADOS");
+        fnt.print(px + 18, footY, "AJUSTES GUARDADOS EN MEMORY CARD");
     } else {
         fnt.color = COL_WHITE;
-        fnt.print(px + 18, footY, "[IZQ/DER] CAMBIAR   [X] OK   [O] VOLVER");
+        fnt.print(px + 18, footY, "[IZQ/DER] CAMBIAR   [X] ACEPTAR   [O] VOLVER");
     }
 }
 
+// ============================================================================
+// CONTROLES DUALSHOCK 2
+// ============================================================================
 function drawControlsMenu(screenW, screenH, fnt) {
     const { sx, sy } = getSafeMargins();
     Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
@@ -3178,28 +3277,32 @@ function drawControlsMenu(screenW, screenH, fnt) {
         ["START / R2",         "Pausa / Diagnostico PS2"]
     ];
 
-    let y = py + 44;
+    let y = py + 46;
     for (let i = 0; i < bindings.length; i++) {
-        Draw.rect(px + 14, y - 2, panelW - 28, 27, (i & 1) ? rgba(20, 16, 22, 95) : rgba(14, 12, 18, 95));
-        fnt.scale = Math.fround(0.72);
+        Draw.rect(px + 14, y - 2, panelW - 28, 27, (i & 1) ? COL_ROW_ALT : COL_ROW_DARK);
+        Draw.rect(px + 18, y + 1, 208, 21, COL_KEYCAP_BG);
+        fnt.scale = Math.fround(0.71);
         fnt.color = COL_GOLD;
-        fnt.print(px + 20, y + 1, bindings[i][0]);
+        fnt.print(px + 24, y + 2, bindings[i][0]);
         fnt.color = COL_WHITE;
-        fnt.print(px + 245, y + 1, bindings[i][1]);
+        fnt.print(px + 238, y + 2, bindings[i][1]);
         y += 30;
     }
 
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_CYAN;
-    fnt.print(px + 20, y + 8, "TIP: Apaga la luz para ocultarte o iluminalo.");
+    fnt.print(px + 18, y + 8, "TIP: Agachate [CUAD] o escondete [X] con la luz apagada.");
 
     const footY = py + panelH - 34;
-    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    Draw.rect(px + 14, footY - 8, panelW - 28, 1, COL_BORDER_STEEL);
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_GOLD;
-    fnt.print(px + 20, footY, "[X] o [CIRCULO] VOLVER");
+    fnt.print(px + 18, footY, "[X] o [CIRCULO] VOLVER");
 }
 
+// ============================================================================
+// EXPEDIENTE / REGISTROS (8 NOTAS DE CAMPAÑA)
+// ============================================================================
 function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPause, fnt) {
     const { sx, sy } = getSafeMargins();
     Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
@@ -3212,7 +3315,6 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
     const title = fromPause ? "REGISTROS RECOLECTADOS" : "EXPEDIENTE - SUBSUELO 04";
     drawPanel(px, py, panelW, panelH, title, fnt);
 
-    // Pestañas superiores en ventana de 4 (soporta 8 notas de campaña sin desbordar)
     const tabPage = (selectedNoteIdx >= 4) ? 4 : 0;
     const tabW = ((panelW - 44) / 4) | 0;
     for (let slot = 0; slot < 4; slot++) {
@@ -3221,40 +3323,42 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
         const tx = px + 16 + slot * (tabW + 4);
         const sel = (i === selectedNoteIdx);
         const unlocked = !fromPause || collectedNotes[i];
-        Draw.rect(tx, py + 44, tabW, 28, sel ? COL_SEL_BG : rgba(20, 18, 24, 110));
-        if (sel) Draw.rect(tx, py + 70, tabW, 2, COL_SEL_BAR);
+        Draw.rect(tx, py + 46, tabW, 28, sel ? COL_SEL_BG : COL_ROW_DARK);
+        if (sel) Draw.rect(tx, py + 72, tabW, 2, COL_SEL_BAR);
         fnt.scale = Math.fround(0.72);
         fnt.color = sel ? COL_GOLD : (unlocked ? COL_WHITE : COL_MUTED);
         const openLbl = ["NOTA #0", String(i + 1)].join("");
         const lockLbl = ["BLOQ #0", String(i + 1)].join("");
-        fnt.print(tx + 8, py + 48, unlocked ? openLbl : lockLbl);
+        fnt.print(tx + 8, py + 50, unlocked ? openLbl : lockLbl);
     }
 
-    const note = LORE_NOTES[selectedNoteIdx];
+    const note = LORE_NOTES[selectedNoteIdx] || LORE_NOTES[0];
     const unlocked = !fromPause || collectedNotes[selectedNoteIdx];
     const bodyY = py + 88;
+    Draw.rect(px + 16, bodyY - 4, panelW - 32, panelH - 142, rgba(11, 12, 18, 112));
+    Draw.rect(px + 16, bodyY - 4, 3, panelH - 142, unlocked ? COL_GOLD : COL_BORDER_STEEL);
 
     if (unlocked) {
         fnt.scale = Math.fround(0.74);
         fnt.color = COL_GOLD;
-        fnt.print(px + 20, bodyY, note.code);
+        fnt.print(px + 28, bodyY + 4, note.code);
 
-        fnt.scale = Math.fround(0.74);
+        fnt.scale = Math.fround(0.73);
         fnt.color = COL_WHITE;
         for (let l = 0; l < note.lines.length; l++) {
-            fnt.print(px + 20, bodyY + 36 + l * 32, note.lines[l]);
+            fnt.print(px + 28, bodyY + 38 + l * 32, note.lines[l]);
         }
     } else {
         fnt.scale = Math.fround(0.74);
         fnt.color = COL_MUTED;
-        fnt.print(px + 20, bodyY + 24, "REGISTRO NO ENCONTRADO");
+        fnt.print(px + 28, bodyY + 24, "REGISTRO NO ENCONTRADO");
         fnt.scale = Math.fround(0.72);
-        fnt.print(px + 20, bodyY + 66, "Explora el Subsuelo 04 y recoge las");
-        fnt.print(px + 20, bodyY + 98, "hojas marcadas en el plano PDA.");
+        fnt.print(px + 28, bodyY + 66, "Explora los 3 capitulos y recoge las");
+        fnt.print(px + 28, bodyY + 98, "hojas marcadas en el plano PDA.");
     }
 
     const footY = py + panelH - 34;
-    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    Draw.rect(px + 14, footY - 8, panelW - 28, 1, COL_BORDER_STEEL);
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_WHITE;
     fnt.print(px + 18, footY, fromPause
@@ -3262,6 +3366,9 @@ function drawLoreMenu(screenW, screenH, collectedNotes, selectedNoteIdx, fromPau
         : "[IZQ/DER] NOTA   [TRIANG.] VER INTRO   [X/O] VOLVER");
 }
 
+// ============================================================================
+// CRÉDITOS Y HARDWARE PS2
+// ============================================================================
 function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
     const { sx, sy } = getSafeMargins();
     Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
@@ -3273,41 +3380,44 @@ function drawCreditsMenu(screenW, screenH, modeInfo, fnt) {
 
     drawPanel(px, py, panelW, panelH, "CREDITOS Y SISTEMA PS2", fnt);
 
-    fnt.scale = Math.fround(0.80);
+    fnt.scale = Math.fround(0.84);
     fnt.color = COL_TITLE_RED;
-    fnt.print(px + 22, py + 46, "SUBSUELO 04: EL ACECHADOR");
+    fnt.print(px + 22, py + 48, "SUBSUELO 04: EL ACECHADOR");
 
     fnt.scale = Math.fround(0.72);
     fnt.color = COL_WHITE;
-    fnt.print(px + 22, py + 82,  "Estudio:   HK Entertainment");
+    fnt.print(px + 22, py + 84,  "Estudio:   HK Entertainment");
     fnt.print(px + 22, py + 112, "Autor:     Joaquin Gasperetti");
-    fnt.print(px + 22, py + 142, "Motor:     HK Engine 1");
+    fnt.print(px + 22, py + 140, "Motor:     HK Engine 1 (AthenaEnv V4)");
 
-    Draw.rect(px + 20, py + 176, panelW - 40, 2, rgba(70, 50, 55, 110));
+    Draw.rect(px + 20, py + 174, panelW - 40, 1, COL_BORDER_STEEL);
 
     fnt.scale = Math.fround(0.74);
     fnt.color = COL_GOLD;
-    fnt.print(px + 22, py + 186, "TELEMETRIA DE CONSOLA:");
+    fnt.print(px + 22, py + 184, "TELEMETRIA DE CONSOLA:");
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_CYAN;
-    fnt.print(px + 22, py + 218, ["Video: ", String(screenW), "x", String(screenH), " (", modeInfo.vmodeLabel, ")"].join(""));
-    fnt.print(px + 22, py + 246, isAudioReady() ? "Audio PS2: ACTIVO" : "Audio PS2: INACTIVO");
-    fnt.print(px + 22, py + 274, RECORDS.mcAvailable ? "Memory Card (mc0): OK" : "Memory Card (mc0): NO DETECTADA");
-    fnt.print(px + 22, py + 302, ["Escapes totales: ", String(RECORDS.escapes)].join(""));
+    fnt.print(px + 22, py + 216, ["Video: ", String(screenW), "x", String(screenH), " (", modeInfo.vmodeLabel, ")"].join(""));
+    fnt.print(px + 22, py + 244, isAudioReady() ? "Audio PS2: ACTIVO (OGG Stream)" : "Audio PS2: INACTIVO");
+    fnt.print(px + 22, py + 272, RECORDS.mcAvailable ? "Memory Card (mc0): OK" : "Memory Card (mc0): NO DETECTADA");
+    fnt.print(px + 22, py + 300, ["Escapes: ", String(RECORDS.escapes), "   |   Campana: Cap ", String(RECORDS.maxChapterUnlocked || 1), "/3"].join(""));
 
     const footY = py + panelH - 34;
-    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    Draw.rect(px + 14, footY - 8, panelW - 28, 1, COL_BORDER_STEEL);
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_GOLD;
     fnt.print(px + 20, footY, "[X] o [CIRCULO] VOLVER");
 }
 
+// ============================================================================
+// MENÚ DE PAUSA CON CURSOR DESLIZANTE
+// ============================================================================
 function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
     const { sx, sy } = getSafeMargins();
-    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 6, 98));
+    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 8, 102));
 
     const panelW = Math.min(490, screenW - sx * 2);
-    const panelH = 336;
+    const panelH = 340;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
@@ -3316,68 +3426,74 @@ function drawPauseMenu(screenW, screenH, cursor, notesFoundCount, fnt) {
     const items = [
         "CONTINUAR PARTIDA",
         "OPCIONES Y VIDEO PS2",
-        PAUSE_REG_LABELS[notesFoundCount] || "REGISTROS (0/4)",
+        PAUSE_REG_LABELS[notesFoundCount] || "REGISTROS (0/8)",
         "CONTROLES",
-        "REINICIAR PARTIDA",
+        "REINICIAR CAPITULO",
         "VOLVER AL MENU PRINCIPAL"
     ];
 
     const startY = py + 50;
     const rowH = 39;
+    uiPauseSlideY = uiLerpY(uiPauseSlideY, toF64(startY + cursor * rowH - 3));
+    const syi = uiPauseSlideY | 0;
+
+    Draw.rect(px + 16, syi, panelW - 32, 33, COL_SEL_BG);
+    Draw.rect(px + 16, syi, 5, 33, COL_SEL_BAR);
+
     for (let i = 0; i < items.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
-        if (sel) {
-            Draw.rect(px + 16, ry - 3, panelW - 32, 33, COL_SEL_BG);
-            Draw.rect(px + 16, ry - 3, 5, 33, COL_SEL_BAR);
-        }
-        fnt.scale = Math.fround(0.78);
+        fnt.scale = Math.fround(0.76);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         if (sel) {
-            fnt.print(px + 26, ry + 2, ">");
-            fnt.print(px + 48, ry + 2, items[i]);
+            fnt.print(px + 28, ry + 2, ">");
+            fnt.print(px + 50, ry + 2, items[i]);
         } else {
             fnt.print(px + 44, ry + 2, items[i]);
         }
     }
 
+    Draw.rect(px + 16, py + panelH - 40, panelW - 32, 1, COL_BORDER_STEEL);
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_WHITE;
-    fnt.print(px + 18, py + panelH - 32, "[X] ELEGIR   [O/START] SEGUIR");
+    fnt.print(px + 18, py + panelH - 30, "[X] ELEGIR   [O/START] SEGUIR");
 }
 
 function drawNoteOverlay(screenW, screenH, noteIdx, fnt) {
     const { sx } = getSafeMargins();
-    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 6, 96));
+    Draw.rect(0, 0, screenW, screenH, rgba(0, 0, 8, 100));
 
     const note = LORE_NOTES[noteIdx] || LORE_NOTES[0];
     const panelW = Math.min(548, screenW - sx * 2);
-    const panelH = 276;
+    const panelH = 280;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
-    drawPanel(px, py, panelW, panelH, note.code, fnt, rgba(160, 175, 200, 120));
+    drawPanel(px, py, panelW, panelH, note.code, fnt, COL_GOLD);
 
     fnt.scale = Math.fround(0.74);
     fnt.color = COL_WHITE;
     for (let l = 0; l < note.lines.length; l++) {
-        fnt.print(px + 18, py + 48 + l * 34, note.lines[l]);
+        fnt.print(px + 22, py + 52 + l * 34, note.lines[l]);
     }
 
-    Draw.rect(px, py + panelH - 38, panelW, 2, rgba(80, 90, 110, 110));
+    Draw.rect(px + 16, py + panelH - 38, panelW - 32, 1, COL_BORDER_STEEL);
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_GOLD;
-    fnt.print(px + 18, py + panelH - 30, "[X] o [CIRCULO] GUARDAR Y SEGUIR");
+    fnt.print(px + 20, py + panelH - 28, "[X] o [CIRCULO] GUARDAR Y SEGUIR");
 }
 
+// ============================================================================
+// PANTALLAS FINALES (VICTORIA CON RANGO ENMARCADO / DERROTA)
+// ============================================================================
 function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, difficulty, fnt) {
     const { sx } = getSafeMargins();
-    const tint = isWin ? rgba(4, 26, 12, 98) : rgba(48, 0, 6, 106);
-    const accent = isWin ? rgba(65, 210, 110, 124) : COL_BORDER_RED;
+    const tint = isWin ? rgba(4, 24, 12, 102) : rgba(42, 2, 6, 108);
+    const accent = isWin ? COL_GREEN : COL_BORDER_RED;
     Draw.rect(0, 0, screenW, screenH, tint);
 
-    const panelW = Math.min(540, screenW - sx * 2);
-    const panelH = 316;
+    const panelW = Math.min(544, screenW - sx * 2);
+    const panelH = 324;
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
@@ -3385,50 +3501,56 @@ function drawEndScreen(screenW, screenH, isWin, cursor, secs, notesFound, diffic
 
     if (isWin) {
         let rank = "C";
-        if (secs <= 95 && notesFound >= 3) rank = "S";
-        else if (secs <= 135) rank = "A";
-        else if (secs <= 190) rank = "B";
+        if (secs <= 240 && notesFound >= 5) rank = "S";
+        else if (secs <= 360) rank = "A";
+        else if (secs <= 520) rank = "B";
 
         fnt.scale = Math.fround(0.80);
         fnt.color = COL_GREEN;
-        fnt.print(px + 20, py + 46, "ESCAPASTE DEL SUBSUELO 04!");
+        fnt.print(px + 22, py + 48, "ESCAPASTE DEL SUBSUELO 04!");
 
         fnt.scale = Math.fround(0.74);
         fnt.color = COL_WHITE;
-        fnt.print(px + 20, py + 88,  ["Tiempo:     ", formatTime(secs)].join(""));
-        fnt.print(px + 20, py + 118, ["Dificultad: ", DIFF_LABELS[difficulty] || "NORMAL"].join(""));
-        fnt.print(px + 20, py + 148, ["Registros:  ", String(notesFound), "/4"].join(""));
+        fnt.print(px + 22, py + 90,  ["Tiempo:     ", formatTime(secs)].join(""));
+        fnt.print(px + 22, py + 120, ["Dificultad: ", DIFF_LABELS[difficulty] || "NORMAL"].join(""));
+        fnt.print(px + 22, py + 150, ["Registros:  ", String(notesFound), "/8"].join(""));
 
-        fnt.scale = Math.fround(1.1);
+        // Sello de rango con esquinas doradas
+        const rx = px + panelW - 142;
+        const ry = py + 84;
+        Draw.rect(rx, ry, 114, 86, rgba(16, 20, 14, 122));
+        drawCornerBrackets(rx, ry, 114, 86, 14, COL_GOLD);
+        fnt.scale = Math.fround(0.70);
+        fnt.color = COL_MUTED;
+        fnt.print(rx + 26, ry + 8, "RANGO");
+        fnt.scale = Math.fround(1.45);
         fnt.color = COL_GOLD;
-        fnt.print(px + panelW - 140, py + 96, ["RANGO ", rank].join(""));
+        fnt.print(rx + 42, ry + 30, rank);
     } else {
-        fnt.scale = Math.fround(0.80);
+        fnt.scale = Math.fround(0.82);
         fnt.color = COL_TITLE_RED;
-        fnt.print(px + 20, py + 48, "EL ACECHADOR TE ATRAPO");
+        fnt.print(px + 22, py + 50, "EL ACECHADOR TE ATRAPO");
 
         fnt.scale = Math.fround(0.74);
         fnt.color = COL_WHITE;
-        fnt.print(px + 20, py + 90,  ["Tiempo: ", formatTime(secs)].join(""));
+        fnt.print(px + 22, py + 92,  ["Tiempo sobrevivido: ", formatTime(secs)].join(""));
         fnt.scale = Math.fround(0.70);
         fnt.color = COL_CYAN;
-        fnt.print(px + 20, py + 126, "TIP: Apaga la luz [TRIANG] para ocultarte");
-        fnt.print(px + 20, py + 156, "o apunta a sus ojos para frenarlo.");
+        fnt.print(px + 22, py + 128, "TIP: Usa [CUAD] para sigilo, [L2] para lanzar");
+        fnt.print(px + 22, py + 156, "un senuelo o escondete [X] con la luz apagada.");
     }
 
     const opts = isWin ? END_OPTS_WIN : END_OPTS_DEAD;
-    const optY = py + 204;
+    const optY = py + 208;
     for (let i = 0; i < opts.length; i++) {
         const ry = optY + i * 42;
         const sel = (i === cursor);
-        if (sel) {
-            Draw.rect(px + 20, ry - 3, panelW - 40, 34, isWin ? rgba(20, 88, 42, 118) : COL_SEL_BG);
-            Draw.rect(px + 20, ry - 3, 5, 34, isWin ? COL_GREEN : COL_SEL_BAR);
-        }
-        fnt.scale = Math.fround(0.78);
+        Draw.rect(px + 20, ry - 3, panelW - 40, 34, sel ? (isWin ? rgba(20, 88, 42, 120) : COL_SEL_BG) : COL_ROW_DARK);
+        if (sel) Draw.rect(px + 20, ry - 3, 5, 34, isWin ? COL_GREEN : COL_SEL_BAR);
+        fnt.scale = Math.fround(0.76);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
         if (sel) {
-            fnt.print(px + 32, ry + 2, ">");
+            fnt.print(px + 34, ry + 2, ">");
             fnt.print(px + 54, ry + 2, opts[i]);
         } else {
             fnt.print(px + 48, ry + 2, opts[i]);
@@ -3445,10 +3567,13 @@ function drawPadDisconnectedOverlay(screenW, screenH, fnt) {
     drawPanel(px, py, pw, ph, "MANDO DESCONECTADO", fnt);
     fnt.scale = Math.fround(0.74);
     fnt.color = COL_GOLD;
-    fnt.print(px + 20, py + 52, "Conecta un DualShock 2 en el");
-    fnt.print(px + 20, py + 84, "Puerto 1 para continuar.");
+    fnt.print(px + 22, py + 54, "Conecta un DualShock 2 en el");
+    fnt.print(px + 22, py + 84, "Puerto 1 para continuar.");
 }
 
+// ============================================================================
+// GALERÍA DE CINEMÁTICAS (TEST) CON BADGES DE CAPÍTULO Y CURSOR SUAVE
+// ============================================================================
 function drawCinematicsMenu(screenW, screenH, cursor, fnt) {
     const { sx, sy } = getSafeMargins();
     Draw.rect(0, 0, screenW, screenH, COL_BG_DIM);
@@ -3458,42 +3583,51 @@ function drawCinematicsMenu(screenW, screenH, cursor, fnt) {
     const px = (screenW - panelW) >> 1;
     const py = (screenH - panelH) >> 1;
 
-    drawPanel(px, py, panelW, panelH, "CINEMATICAS (MODO TEST)", fnt);
+    drawPanel(px, py, panelW, panelH, "GALERIA DE CINEMATICAS (TEST)", fnt);
 
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_MUTED;
-    fnt.print(px + 20, py + 48, "Selecciona una secuencia para reproducirla (START 1s para omitir):");
+    fnt.print(px + 20, py + 46, "Selecciona una secuencia (START 1s para omitir):");
 
     const startY = py + 76;
     const rowH = 52;
+    uiCinSlideY = uiLerpY(uiCinSlideY, toF64(startY + cursor * rowH - 3));
+
+    for (let i = 0; i < CINEMATIC_MENU_ITEMS.length; i++) {
+        const ry = startY + i * rowH;
+        Draw.rect(px + 16, ry - 3, panelW - 32, 46, (i & 1) ? COL_ROW_ALT : COL_ROW_DARK);
+    }
+
+    const syi = uiCinSlideY | 0;
+    Draw.rect(px + 16, syi, panelW - 32, 46, COL_SEL_BG);
+    Draw.rect(px + 16, syi, 6, 46, COL_SEL_BAR);
+
     for (let i = 0; i < CINEMATIC_MENU_ITEMS.length; i++) {
         const ry = startY + i * rowH;
         const sel = (i === cursor);
         const item = CINEMATIC_MENU_ITEMS[i];
-        Draw.rect(px + 16, ry - 3, panelW - 32, 46, sel ? COL_SEL_BG : rgba(18, 15, 22, 105));
-        if (sel) Draw.rect(px + 16, ry - 3, 6, 46, COL_SEL_BAR);
+
+        // Badge de capítulo a la izquierda
+        Draw.rect(px + 28, ry + 6, 62, 26, sel ? rgba(30, 12, 16, 124) : COL_KEYCAP_BG);
+        fnt.scale = Math.fround(0.70);
+        fnt.color = sel ? COL_GOLD : COL_CYAN;
+        fnt.print(px + 34, ry + 9, item.badge);
 
         fnt.scale = Math.fround(sel ? 0.76 : 0.72);
         fnt.color = sel ? COL_GOLD : COL_WHITE;
-        if (sel) {
-            fnt.print(px + 26, ry + 1, ">");
-            fnt.print(px + 46, ry + 1, item.title);
-        } else {
-            fnt.print(px + 42, ry + 1, item.title);
-        }
+        fnt.print(px + 102, ry + 1, item.title);
 
         fnt.scale = Math.fround(0.70);
         fnt.color = sel ? COL_CYAN : COL_MUTED;
-        fnt.print(px + 42, ry + 23, item.meta);
+        fnt.print(px + 102, ry + 23, item.meta);
     }
 
     const footY = py + panelH - 34;
-    Draw.rect(px, footY - 8, panelW, 2, rgba(70, 35, 40, 110));
+    Draw.rect(px + 14, footY - 8, panelW - 28, 1, COL_BORDER_STEEL);
     fnt.scale = Math.fround(0.70);
     fnt.color = COL_WHITE;
     fnt.print(px + 18, footY, "[D-PAD] ELEGIR   [X] REPRODUCIR   [O] VOLVER");
 }
-
 // --- MODULE: src/cinematic.js ---
 // ============================================================================
 // Sistema de Cinemáticas Declarativo para HK Engine 1 (PS2 Real / AthenaEnv V4)
@@ -4839,6 +4973,9 @@ let exhausted = false;
 let bumpCooldown = 0;
 let playerVelX = toF64(0.0);
 let playerVelY = toF64(0.0);
+let playerTurnVel = toF64(0.0);
+let camShake = toF64(0.0);
+let camBreathPhase = toF64(0.0);
 let quickTurnRem = toF64(0.0);
 let playerDecoys = 1;
 let decoyCooldown = 0;
@@ -5016,6 +5153,9 @@ function resetGame(chapterIdx) {
     bumpCooldown = 0;
     playerVelX = toF64(0.0);
     playerVelY = toF64(0.0);
+    playerTurnVel = toF64(0.0);
+    camShake = toF64(0.0);
+    camBreathPhase = toF64(0.0);
     quickTurnRem = toF64(0.0);
     playerDecoys = 1;
     decoyCooldown = 0;
@@ -5225,7 +5365,20 @@ Screen.display(() => {
         }
 
         if (gameState === STATE_TITLE) {
-            player.ang = toF64(frameTick * 0.002);
+            if (GAME_SETTINGS.qualityIndex === 0 && hwLoadedChapterIdx < 0) {
+                prepareChapter3D(0);
+            }
+            if (!hwStreamDone && !hwStreamFailed) {
+                tickProgressive3DStream();
+                if (hw3dReady && hwEntityTransforms.length === 0) buildHwEntityTransforms();
+            }
+            player.x = toF64(10.0);
+            player.y = toF64(10.5);
+            player.eyeH = toF64(1.62 + Math.sin(frameTick * 0.015) * 0.05);
+            player.pitchY = toF64(-0.08);
+            player.flashlightOn = true;
+            player.battery = toF64(100.0);
+            player.ang = toF64(frameTick * 0.0022);
             render3DWorld(SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities, 0.22, frameTick, false, 0.90, 1.0, 1.0, 0.0);
             drawTitleMenu(SCREEN_W, SCREEN_H, titleCursor, frameTick, fnt);
 
@@ -5444,9 +5597,17 @@ Screen.display(() => {
                 flashlightWarmup = toF64(Math.min(1.0, fadd(flashlightWarmup, 0.14 * dtScale)));
             }
 
-            const targetEyeH = player.hiding ? toF64(1.18) : (player.crouched ? toF64(1.02) : toF64(WORLD_EYE_H));
-            const curEyeH = toF64(player.eyeH !== undefined ? player.eyeH : WORLD_EYE_H);
-            player.eyeH = fadd(curEyeH, (targetEyeH - curEyeH) * Math.min(1.0, 0.22 * dtScale));
+            // Gamefeel: altura base suave + respiración orgánica + headbob + sacudida de impacto
+            const baseEyeTarget = player.hiding ? toF64(1.18) : (player.crouched ? toF64(1.02) : toF64(WORLD_EYE_H));
+            const curEyeBase = toF64(player.eyeBase !== undefined ? player.eyeBase : WORLD_EYE_H);
+            player.eyeBase = fadd(curEyeBase, (baseEyeTarget - curEyeBase) * Math.min(1.0, 0.22 * dtScale));
+            const breathRate = exhausted ? 0.14 : (player.hiding ? 0.09 : 0.045);
+            camBreathPhase = fadd(camBreathPhase, toF64(breathRate * dtScale));
+            if ((camShake - 0.005) > 0) {
+                camShake = toF64(Math.max(0.0, camShake - 0.032 * dtScale));
+            } else {
+                camShake = toF64(0.0);
+            }
 
             let fwd = F64_ZERO, strafe = F64_ZERO;
             const lx = toF64((pad.lx || 0) / 128.0);
@@ -5462,16 +5623,21 @@ Screen.display(() => {
                 quickTurnRem = toF64(Math.PI);
             }
             if ((quickTurnRem - 0.01) > 0) {
-                const qtStep = Math.min(quickTurnRem, toF64(0.26 * dtScale));
+                // Curva ease-out para giro 180° suave y firme
+                const qtStep = Math.min(quickTurnRem, toF64(Math.max(0.11, quickTurnRem * 0.24) * dtScale));
                 player.ang = fadd(player.ang, qtStep);
                 quickTurnRem = quickTurnRem - qtStep;
+                playerTurnVel = toF64(0.0);
             } else {
                 const rx = toF64((pad.rx || 0) / 128.0);
                 const baseTurn = toF64(SENS_TURN_SPEED[GAME_SETTINGS.sensitivityIndex] || 0.052);
-                const turnSpeed = (mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn) * dtScale;
-                if ((Math.abs(rx) - STICK_DEADZONE) > 0) player.ang = fadd(player.ang, rx * turnSpeed);
-                if (pad.pressed(Pads.L1)) player.ang = player.ang - turnSpeed;
-                if (pad.pressed(Pads.R1)) player.ang = fadd(player.ang, turnSpeed);
+                const turnSpeed = mapOpen || player.hiding ? (baseTurn * 0.55) : baseTurn;
+                let tgtTurn = toF64(0.0);
+                if ((Math.abs(rx) - STICK_DEADZONE) > 0) tgtTurn = rx * turnSpeed;
+                if (pad.pressed(Pads.L1)) tgtTurn = tgtTurn - turnSpeed;
+                if (pad.pressed(Pads.R1)) tgtTurn = fadd(tgtTurn, turnSpeed);
+                playerTurnVel = fadd(playerTurnVel, (tgtTurn - playerTurnVel) * Math.min(1.0, 0.36 * dtScale));
+                player.ang = fadd(player.ang, playerTurnVel * dtScale);
             }
             if ((player.ang - Math.PI) > 0) player.ang = player.ang - Math.PI * 2.0;
             else if ((player.ang - (-Math.PI)) < 0) player.ang = fadd(player.ang, Math.PI * 2.0);
@@ -5522,6 +5688,7 @@ Screen.display(() => {
             if (bumpedGate && bumpCooldown === 0) {
                 bumpCooldown = 60;
                 playSfx("gate_locked", 0, 0.9);
+                camShake = toF64(0.45);
                 triggerRumble(110, 1);
                 triggerScreenFlash(200, 60, 20, 42);
                 showRadio("REJA BLOQUEADA: Activa el disyuntor central para liberar el paso.", 160);
@@ -5664,6 +5831,7 @@ Screen.display(() => {
                                         if (worldGrid[gy][gx] === 5) worldGrid[gy][gx] = 0;
                                     }
                                 }
+                                camShake = toF64(0.65);
                                 triggerScreenFlash(60, 255, 110, 62);
                                 triggerRumble(210, 1);
                                 showPopup("REJAS DESBLOQUEADAS");
@@ -5691,11 +5859,13 @@ Screen.display(() => {
 
             if (ai.chaseIntroStarted) {
                 setMusicTrack("chase", true);
+                camShake = toF64(0.55);
                 showPopup("TE HA DETECTADO...", 120);
                 showRadio("ALGO SE ACERCA... PREPARATE PARA CORRER!", 260);
                 triggerScreenFlash(160, 20, 25, 36);
             } else if (ai.chaseHuntStarted) {
                 setMusicTrack("chase", false);
+                camShake = toF64(0.85);
                 showPopup("! TE PERSIGUE !", 95);
                 showRadio("EL ACECHADOR TE PERSIGUE! CORRE!", 190);
                 triggerScreenFlash(220, 18, 22, 56);
@@ -5726,10 +5896,31 @@ Screen.display(() => {
                 return;
             }
 
+            // Aplicar headbob, respiración orgánica, cabeceo sutil y sacudida de impacto
+            const bobAmp = isMoving ? (isSprinting ? 0.058 : (player.crouched ? 0.015 : 0.032)) : 0.0;
+            const headBobY = GAME_SETTINGS.bob ? (Math.sin(player.bobPhase * 2.0) * bobAmp) : 0.0;
+            const breathAmp = exhausted ? 0.024 : (0.010 + dangerRatio * 0.016);
+            const breathY = Math.sin(camBreathPhase) * breathAmp;
+            let shkY = 0.0;
+            let shkPitch = 0.0;
+            const totalShake = Math.max(camShake, (dangerRatio - 0.55) > 0 ? (dangerRatio - 0.55) * 0.45 : 0.0);
+            if ((totalShake - 0.01) > 0) {
+                shkY = ((cinHashByte(frameTick * 7 + 13) - 128) / 128.0) * 0.055 * totalShake;
+                shkPitch = ((cinHashByte(frameTick * 11 + 29) - 128) / 128.0) * 0.14 * totalShake;
+            }
+            player.eyeH = clampF64(fadd(fadd(player.eyeBase, headBobY + breathY), shkY), 0.75, 2.05);
+            player.pitchY = fadd(headBobY * 1.4, shkPitch);
+
+            // Parpadeo sutil de linterna cuando queda poca batería (< 20%)
+            let effFlashWarm = flashlightWarmup;
+            if (player.flashlightOn && ((player.battery - 20.0) < 0) && ((player.battery - 0.0) > 0)) {
+                if (cinHashByte(frameTick * 5 + 17) < 28) effFlashWarm = toF64(0.32);
+            }
+
             render3DWorld(
                 SCREEN_W, SCREEN_H, worldGrid, player, stalker, entities,
                 dangerRatio, frameTick, fusesCollected === 4, currentFov,
-                flashlightWarmup, mapAnim, ai.sideBias
+                effFlashWarm, mapAnim, ai.sideBias
             );
 
             if (GAME_SETTINGS.overlays) {
@@ -5763,8 +5954,6 @@ Screen.display(() => {
             const { sx, sy } = getSafeMargins();
             const hudW = SCREEN_W - sx * 2;
             const topY = sy;
-            Draw.rect(sx, topY, hudW, 38, rgba(4, 6, 10, 124));
-            Draw.rect(sx, topY + 37, hudW, 2, rgba(70, 95, 115, 120));
 
             if (player.hiding) {
                 Draw.rect(0, 0, SCREEN_W, 92, rgba(0, 0, 0, 118));
@@ -5772,23 +5961,70 @@ Screen.display(() => {
                 Draw.rect(0, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
                 Draw.rect(SCREEN_W - 68, 92, 68, SCREEN_H - 184, rgba(0, 0, 0, 112));
             }
+
+            // Retícula central sutil (se ilumina en dorado cuando hay interacción [X])
+            if (!mapOpen && !player.hiding) {
+                const cx = SCREEN_W >> 1;
+                const cy = SCREEN_H >> 1;
+                if (activeInteractLabel.length > 0) {
+                    const rCol = rgba(250, 218, 100, 118);
+                    Draw.rect(cx - 1, cy - 1, 3, 3, rCol);
+                    Draw.rect(cx - 10, cy - 5, 2, 10, rCol);
+                    Draw.rect(cx + 8, cy - 5, 2, 10, rCol);
+                } else {
+                    Draw.rect(cx - 1, cy - 1, 2, 2, rgba(220, 230, 240, 52));
+                }
+            }
+
+            // Aviso contextual [X] limpio y centrado
             if (activeInteractLabel.length > 0 && !mapOpen) {
-                const prW = Math.min(430, SCREEN_W - sx * 2 - 20);
+                const prW = Math.min(436, hudW - 24);
                 const prX = (SCREEN_W - prW) >> 1;
-                const prY = SCREEN_H - sy - 82;
-                Draw.rect(prX, prY, prW, 30, rgba(8, 10, 16, 118));
+                const prY = SCREEN_H - sy - 86;
+                Draw.rect(prX, prY, prW, 32, rgba(8, 10, 16, 122));
                 Draw.rect(prX, prY, prW, 2, rgba(250, 215, 95, 124));
+                Draw.rect(prX, prY + 30, prW, 1, rgba(90, 102, 120, 100));
                 fnt.scale = Math.fround(0.70);
                 fnt.color = rgba(250, 225, 115, 128);
-                fnt.print(prX + 14, prY + 6, activeInteractLabel);
+                fnt.print(prX + 14, prY + 7, activeInteractLabel);
             }
-            fnt.scale = Math.fround(0.68);
-            fnt.color = rgba(245, 245, 250, 128);
-            fnt.print(sx + 10, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
-            fnt.color = rgba(120, 225, 255, 128);
-            fnt.print(sx + 102, topY + 8, DECOY_HUD_LABELS[playerDecoys] || "SEN:0");
-            fnt.color = player.crouched ? rgba(95, 245, 135, 128) : rgba(175, 185, 200, 120);
-            fnt.print(sx + 178, topY + 8, player.crouched ? "SIGILO" : getActiveChapter().code);
+
+            // Barra HUD superior táctica (sin superposiciones)
+            Draw.rect(sx, topY, hudW, 36, rgba(6, 8, 13, 122));
+            Draw.rect(sx, topY + 35, hudW, 2, rgba(82, 100, 122, 114));
+
+            fnt.scale = Math.fround(0.66);
+            fnt.color = player.crouched ? rgba(92, 244, 138, 128) : rgba(250, 214, 96, 128);
+            fnt.print(sx + 8, topY + 8, player.crouched ? "SIGILO" : getActiveChapter().code);
+
+            fnt.color = rgba(242, 244, 250, 128);
+            fnt.print(sx + 82, topY + 8, FUSE_HUD_LABELS[fusesCollected] || "FUS:0/4");
+
+            fnt.color = rgba(96, 224, 255, 128);
+            fnt.print(sx + 162, topY + 8, DECOY_HUD_LABELS[playerDecoys] || "SEN:0");
+
+            fnt.color = rgba(250, 215, 95, 128);
+            fnt.print(sx + 224, topY + 8, getCompassLabel(player.ang));
+
+            fnt.color = rgba(225, 232, 240, 128);
+            fnt.print(sx + 272, topY + 8, "LUZ");
+            Draw.rect(sx + 312, topY + 11, 54, 12, rgba(20, 28, 38, 128));
+            const batFill = Math.max(0, (player.battery * 0.50) | 0);
+            const batCol = ((player.battery - 25.0) < 0) ? rgba(255, 78, 48, 128) : rgba(62, 224, 255, 128);
+            if (batFill > 0) Draw.rect(sx + 314, topY + 13, batFill, 8, batCol);
+
+            fnt.color = exhausted ? rgba(255, 90, 90, 128) : rgba(225, 232, 240, 128);
+            fnt.print(sx + 374, topY + 8, "STM");
+            Draw.rect(sx + 414, topY + 11, 54, 12, rgba(24, 24, 34, 128));
+            const stamFill = Math.max(0, (player.stamina * 0.50) | 0);
+            const stamCol = exhausted ? rgba(255, 65, 65, 128) : rgba(92, 240, 136, 128);
+            if (stamFill > 0) Draw.rect(sx + 416, topY + 13, stamFill, 8, stamCol);
+
+            const ecgCol = ((dangerRatio - 0.45) > 0) ? rgba(255, 65, 65, 128) : rgba(90, 245, 130, 128);
+            const ecgBaseX = sx + hudW - 102;
+            const ecgW = 94;
+            Draw.rect(ecgBaseX, topY + 6, ecgW, 22, rgba(6, 14, 10, 120));
+
             if (GAME_SETTINGS.qualityIndex === 0 && !hwStreamDone && !hwStreamFailed) {
                 const pendStep = HW3D_STREAM_STEPS[hwStreamStep];
                 Draw.rect(SCREEN_W - sx - 280, topY + 40, 276, 26, rgba(12, 16, 26, 118));
@@ -5796,11 +6032,11 @@ Screen.display(() => {
                 fnt.color = rgba(110, 230, 255, 128);
                 fnt.print(SCREEN_W - sx - 272, topY + 44, (STREAM_3D_BADGES[hwStreamStep] || "3D...") + (pendStep ? " " + pendStep.label : ""));
             }
-            if (hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
-                Draw.rect(SCREEN_W - sx - 210, topY + 40, 206, 24, rgba(8, 14, 22, 118));
+            if (debugMode > 0 && hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
+                Draw.rect(SCREEN_W - sx - 210, topY + 68, 206, 24, rgba(8, 14, 22, 118));
                 fnt.scale = Math.fround(0.60);
                 fnt.color = rgba(120, 245, 160, 128);
-                fnt.print(SCREEN_W - sx - 202, topY + 43, hwVramLabel);
+                fnt.print(SCREEN_W - sx - 202, topY + 71, hwVramLabel);
             }
             if (GAME_SETTINGS.qualityIndex === 0 && hwStreamFailed) {
                 Draw.rect(SCREEN_W - sx - 340, topY + 40, 336, 26, rgba(40, 8, 8, 122));
@@ -5808,32 +6044,6 @@ Screen.display(() => {
                 fnt.color = rgba(255, 150, 130, 128);
                 fnt.print(SCREEN_W - sx - 332, topY + 44, "3D FALLO: " + String(hwLoadErrorMsg || "?").slice(0, 28));
             }
-
-            fnt.color = rgba(250, 215, 95, 128);
-            fnt.print(sx + 114, topY + 8, getCompassLabel(player.ang));
-
-            fnt.color = rgba(235, 235, 240, 128);
-            fnt.print(sx + 174, topY + 8, "LUZ");
-            Draw.rect(sx + 224, topY + 12, 56, 14, rgba(20, 30, 38, 128));
-            const batFill = Math.max(0, (player.battery * 0.52) | 0);
-            const batCol = ((player.battery - 25.0) < 0) ? rgba(255, 80, 45, 128) : rgba(55, 225, 255, 128);
-            if (batFill > 0) Draw.rect(sx + 226, topY + 14, batFill, 10, batCol);
-
-            fnt.color = exhausted ? rgba(255, 95, 95, 128) : rgba(235, 235, 240, 128);
-            fnt.print(sx + 290, topY + 8, "STM");
-            Draw.rect(sx + 342, topY + 12, 56, 14, rgba(25, 25, 32, 128));
-            const stamFill = Math.max(0, (player.stamina * 0.52) | 0);
-            const stamCol = exhausted ? rgba(255, 65, 65, 128) : rgba(95, 240, 135, 128);
-            if (stamFill > 0) Draw.rect(sx + 344, topY + 14, stamFill, 10, stamCol);
-
-            const bpm = (fadd(72.0, dangerRatio * 118.0)) | 0;
-            const ecgCol = ((dangerRatio - 0.45) > 0) ? rgba(255, 65, 65, 128) : rgba(90, 245, 130, 128);
-            fnt.color = ecgCol;
-            fnt.print(sx + 408, topY + 8, ["BPM:", String(bpm)].join(""));
-
-            const ecgBaseX = sx + hudW - 106;
-            const ecgW = 96;
-            Draw.rect(ecgBaseX, topY + 5, ecgW, 20, rgba(6, 14, 10, 120));
             const beatPeriod = Math.max(12, (36.0 - dangerRatio * 18.0) | 0);
             let prevEx = ecgBaseX;
             let prevEy = topY + 15;

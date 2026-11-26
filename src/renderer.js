@@ -915,6 +915,7 @@ function renderHardware3DWorld(
         if (hasDepthToggle) {
             try { Screen.setParam(Screen.DEPTH_TEST_ENABLE, false); } catch (_) {}
         }
+        restore2DRenderState(screenW, screenH);
     }
 
     // 5. Linterna en mano (viewmodel 2D) y vineta sutil (solo en juego activo)
@@ -943,7 +944,7 @@ function render3DWorld(
     dangerRatio, frameTick, exitUnlocked, fov, flashIntensity,
     mapAnim = 0.0, sideBias = 0.0
 ) {
-    if (hw3dReady && GAME_SETTINGS.qualityIndex === 0 && (gameState === STATE_PLAY || gameState === STATE_CINEMATIC)) {
+    if (hw3dReady && GAME_SETTINGS.qualityIndex === 0) {
         hwDrawFailed = false;
         try {
             renderHardware3DWorld(
